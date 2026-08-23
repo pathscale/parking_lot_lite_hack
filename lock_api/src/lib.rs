@@ -115,3 +115,6 @@ pub use crate::remutex::*;
 
 mod rwlock;
 pub use crate::rwlock::*;
+
+mod condvar;
+pub use crate::condvar::*;
