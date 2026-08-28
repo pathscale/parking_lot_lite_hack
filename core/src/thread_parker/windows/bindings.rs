@@ -12,8 +12,8 @@ pub const GENERIC_WRITE: u32 = 1073741824;
 pub const STATUS_SUCCESS: i32 = 0;
 pub const STATUS_TIMEOUT: i32 = 258;
 
-pub type HANDLE = isize;
-pub type HINSTANCE = isize;
+pub type HANDLE = *mut std::ffi::c_void;
+pub type HINSTANCE = *mut std::ffi::c_void;
 pub type BOOL = i32;
 pub type BOOLEAN = u8;
 pub type NTSTATUS = i32;
