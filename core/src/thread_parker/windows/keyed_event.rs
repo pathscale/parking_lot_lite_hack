@@ -50,7 +50,7 @@ impl KeyedEvent {
     #[allow(non_snake_case)]
     pub fn create() -> Option<KeyedEvent> {
         let ntdll = unsafe { GetModuleHandleA(b"ntdll.dll\0".as_ptr()) };
-        if ntdll == 0 {
+        if ntdll.is_null() {
             return None;
         }
 

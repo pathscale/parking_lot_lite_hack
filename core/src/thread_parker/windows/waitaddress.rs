@@ -23,7 +23,7 @@ impl WaitAddress {
     #[allow(non_snake_case)]
     pub fn create() -> Option<WaitAddress> {
         let synch_dll = unsafe { GetModuleHandleA(b"api-ms-win-core-synch-l1-2-0.dll\0".as_ptr()) };
-        if synch_dll == 0 {
+        if synch_dll.is_null() {
             return None;
         }
 
