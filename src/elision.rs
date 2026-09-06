@@ -5,7 +5,18 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use std::sync::atomic::AtomicUsize;
+//! Hardware lock elision, which this fork does not do.
+//!
+//! Upstream gates the x86 `xacquire`/`xrelease` prefixes behind an off-by-
+//! default `hardware-lock-elision` feature. That feature is gone here, so
+//! `have_elision` is `false` and the implementation below is the do-nothing
+//! one that upstream compiles everywhere else.
+//!
+//! The file stays rather than the calls being deleted from `raw_rwlock.rs`,
+//! because the lock itself is the one file worth keeping close to upstream,
+//! and `have_elision()` folding to `false` costs nothing at run time.
+
+use core::sync::atomic::AtomicUsize;
 
 // Extension trait to add lock elision primitives to atomic types
 pub trait AtomicElisionExt {
@@ -25,20 +36,11 @@ pub trait AtomicElisionExt {
 // Indicates whether the target architecture supports lock elision
 #[inline]
 pub fn have_elision() -> bool {
-    cfg!(all(
-        feature = "hardware-lock-elision",
-        not(miri),
-        any(target_arch = "x86", target_arch = "x86_64"),
-    ))
+    false
 }
 
 // This implementation is never actually called because it is guarded by
 // have_elision().
-#[cfg(not(all(
-    feature = "hardware-lock-elision",
-    not(miri),
-    any(target_arch = "x86", target_arch = "x86_64")
-)))]
 impl AtomicElisionExt for AtomicUsize {
     type IntType = usize;
 
@@ -50,70 +52,5 @@ impl AtomicElisionExt for AtomicUsize {
     #[inline]
     fn elision_fetch_sub_release(&self, _: usize) -> usize {
         unreachable!();
-    }
-}
-
-#[cfg(all(
-    feature = "hardware-lock-elision",
-    not(miri),
-    any(target_arch = "x86", target_arch = "x86_64")
-))]
-impl AtomicElisionExt for AtomicUsize {
-    type IntType = usize;
-
-    #[inline]
-    fn elision_compare_exchange_acquire(&self, current: usize, new: usize) -> Result<usize, usize> {
-        unsafe {
-            use core::arch::asm;
-            let prev: usize;
-            #[cfg(target_pointer_width = "32")]
-            asm!(
-                "xacquire",
-                "lock",
-                "cmpxchg [{:e}], {:e}",
-                in(reg) self,
-                in(reg) new,
-                inout("eax") current => prev,
-            );
-            #[cfg(target_pointer_width = "64")]
-            asm!(
-                "xacquire",
-                "lock",
-                "cmpxchg [{}], {}",
-                in(reg) self,
-                in(reg) new,
-                inout("rax") current => prev,
-            );
-            if prev == current {
-                Ok(prev)
-            } else {
-                Err(prev)
-            }
-        }
-    }
-
-    #[inline]
-    fn elision_fetch_sub_release(&self, val: usize) -> usize {
-        unsafe {
-            use core::arch::asm;
-            let prev: usize;
-            #[cfg(target_pointer_width = "32")]
-            asm!(
-                "xrelease",
-                "lock",
-                "xadd [{:e}], {:e}",
-                in(reg) self,
-                inout(reg) val.wrapping_neg() => prev,
-            );
-            #[cfg(target_pointer_width = "64")]
-            asm!(
-                "xrelease",
-                "lock",
-                "xadd [{}], {}",
-                in(reg) self,
-                inout(reg) val.wrapping_neg() => prev,
-            );
-            prev
-        }
     }
 }

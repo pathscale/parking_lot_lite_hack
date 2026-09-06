@@ -1,150 +1,107 @@
-parking_lot
-============
+# parking_lot_lite_hack
 
-[![Rust](https://github.com/Amanieu/parking_lot/workflows/Rust/badge.svg)](https://github.com/Amanieu/parking_lot/actions)
-[![Crates.io](https://img.shields.io/crates/v/parking_lot.svg)](https://crates.io/crates/parking_lot)
+`parking_lot`'s `Mutex` and `RwLock`, with `std` patched out and everything else
+removed.
 
-[Documentation (synchronization primitives)](https://docs.rs/parking_lot/)
+This is a fork of [parking_lot](https://github.com/Amanieu/parking_lot), not a
+reimplementation. `src/raw_mutex.rs`, `src/raw_rwlock.rs` and everything under
+`core/` are upstream's own files.
 
-[Documentation (core parking lot API)](https://docs.rs/parking_lot_core/)
+## Using it
 
-[Documentation (type-safe lock API)](https://docs.rs/lock_api/)
+The package is named `parking_lot_lite_hack` so that it cannot collide with the
+real `parking_lot` in a dependency graph, and so that taking it is a decision
+rather than an accident. Rename it back on the way in:
 
-This library provides implementations of `Mutex`, `RwLock`, `Condvar` and
-`Once` that are smaller, faster and more flexible than those in the Rust
-standard library, as well as a `ReentrantMutex` type which supports recursive
-locking. It also exposes a low-level API for creating your own efficient
-synchronization primitives.
+```toml
+[dependencies]
+parking_lot = { package = "parking_lot_lite_hack", version = "0.12", default-features = false, features = ["arc_lock", "send_guard"] }
+```
 
-When tested on x86_64 Linux, `parking_lot::Mutex` was found to be 1.5x
-faster than `std::sync::Mutex` when uncontended, and up to 5x faster when
-contended from multiple threads. The numbers for `RwLock` vary depending on
-the number of reader and writer threads, but are almost always faster than
-the standard library `RwLock`, and even up to 50x faster in some cases.
+Every `use parking_lot::...` in the consumer then keeps working, and a graph
+that also contains the real `parking_lot` is fine: they are different packages.
+
+## What `no_std` means here
+
+The crate does not link `std`. It does not mean it cannot make a syscall:
+`libc` with default features off is itself `no_std`, so a `no_std` crate on a
+hosted target can still block in the kernel. That is the whole premise, and it
+is why this matches upstream's numbers rather than losing to them the way a
+spinlock does. See [PR-reviewed.md](PR-reviewed.md) for the measurement.
+
+Four things change with `std` off, and nothing else does:
+
+1. `thread_local!` becomes a `pthread_key_t` on unix and an `FlsAlloc` slot on
+   Windows. That is what `thread_local!` lowers to for a type with a
+   destructor, and `Fls` rather than `Tls` because only `Fls` runs one.
+2. `std::time::Instant` becomes `clock_gettime(CLOCK_MONOTONIC)` on unix and
+   `QueryPerformanceCounter` on Windows, the same sources `std` uses.
+3. `std::thread::yield_now` becomes the `sched_yield` it calls.
+4. Nothing else. The locks themselves are upstream's, unedited.
 
 ## Features
 
-The primitives provided by this library have several advantages over those
-in the Rust standard library:
+| feature | default | what it does |
+|---|---|---|
+| `std` | on | Link `std`. Off, the four substitutions above apply. |
+| `arc_lock` | off | `lock_api`'s owned `Arc` guards, which is what a lookup returning a reference into a still-locked node needs. |
+| `send_guard` | off | Guards become `Send`. |
 
-1. `Mutex` and `Once` only require 1 byte of storage space, while `Condvar`
-   and `RwLock` only require 1 word of storage space. On the other hand on
-   some platforms (macOS and a few others) the standard library primitives
-   require a dynamically allocated `Box` to hold OS-specific synchronization 
-   primitives. The small size of `Mutex` in particular encourages the use
-   of fine-grained locks to increase parallelism.
-2. Uncontended lock acquisition and release is done through fast inline
-   paths which only require a single atomic operation.
-3. Microcontention (a contended lock with a short critical section) is
-   efficiently handled by spinning a few times while trying to acquire a
-   lock.
-4. The locks are adaptive and will suspend a thread after a few failed spin
-   attempts. This makes the locks suitable for both long and short critical
-   sections.
-5. `Condvar`, `RwLock` and `Once` work on Windows XP, unlike the standard
-   library versions of those types.
-6. `RwLock` takes advantage of hardware lock elision on processors that
-   support it, which can lead to huge performance wins with many readers.
-   This must be enabled with the `hardware-lock-elision` feature.
-7. `RwLock` uses a task-fair locking policy, which avoids reader and writer
-   starvation, whereas the standard library version makes no guarantees.
-8. `Condvar` is guaranteed not to produce spurious wakeups. A thread will
-    only be woken up if it timed out or it was woken up by a notification.
-9. `Condvar::notify_all` will only wake up a single thread and requeue the
-    rest to wait on the associated `Mutex`. This avoids a thundering herd
-    problem where all threads try to acquire the lock at the same time.
-10. `RwLock` supports atomically downgrading a write lock into a read lock.
-11. `Mutex` and `RwLock` allow raw unlocking without a RAII guard object.
-12. `Mutex<()>` and `RwLock<()>` allow raw locking without a RAII guard
-    object.
-13. `Mutex` and `RwLock` support [eventual fairness](https://trac.webkit.org/changeset/203350)
-    which allows them to be fair on average without sacrificing performance.
-14. A `ReentrantMutex` type which supports recursive locking.
-15. An *experimental* deadlock detector that works for `Mutex`,
-    `RwLock` and `ReentrantMutex`. This feature is disabled by default and
-    can be enabled via the `deadlock_detection` feature.
-16. `RwLock` supports atomically upgrading an "upgradable" read lock into a
-    write lock.
-17. Optional support for [serde](https://docs.serde.rs/serde/).  Enable via the
-    feature `serde`.  **NOTE!** this support is for `Mutex`, `ReentrantMutex`,
-    and `RwLock` only; `Condvar` and `Once` are not currently supported.
-18. Lock guards can be sent to other threads when the `send_guard` feature is
-    enabled.
+That is the whole list. Upstream's `deadlock_detection`, `serde`, `owning_ref`,
+`nightly` and `hardware-lock-elision` are gone, along with the code they gated.
 
-## The parking lot
+## What was removed, and why
 
-To keep these primitives small, all thread queuing and suspending
-functionality is offloaded to the *parking lot*. The idea behind this is
-based on the Webkit [`WTF::ParkingLot`](https://webkit.org/blog/6161/locking-in-webkit/)
-class, which essentially consists of a hash table mapping of lock addresses
-to queues of parked (sleeping) threads. The Webkit parking lot was itself
-inspired by Linux [futexes](https://man7.org/linux/man-pages/man2/futex.2.html),
-but it is more powerful since it allows invoking callbacks while holding a queue
-lock.
+| removed | why |
+|---|---|
+| `Condvar`, `Once`, `FairMutex`, `ReentrantMutex` | not used by the consumer this exists for |
+| deadlock detection | the only thing in `parking_lot_core` that needed `HashSet`, `mpsc` and `ThreadId`, which is to say the only thing that needed `std` |
+| hardware lock elision | x86 only, off by default upstream, and `have_elision()` folds to `false` here |
+| the wasm, SGX, Redox and generic thread parkers | the four backends that reach for `std`; a target that selects one now gets a `compile_error!` naming the restriction |
+| `serde`, `owning_ref`, `nightly` | unused |
 
-## Nightly vs stable
+`src/elision.rs` stays as an inert `have_elision() -> false` rather than having
+its call sites deleted from `raw_rwlock.rs`. The lock is the one file worth
+keeping close to upstream.
 
-There are a few restrictions when using this library on stable Rust:
+## Platforms
 
-- The `wasm32-unknown-unknown` target is only fully supported on nightly with
-  `-C target-feature=+atomics` in `RUSTFLAGS` and `-Zbuild-std=panic_abort,std`
-  passed to cargo. parking_lot will work mostly fine on stable, the only
-  difference is it will panic instead of block forever if you hit a deadlock.
-  Just make sure not to enable `-C target-feature=+atomics` on stable as that
-  will allow wasm to run with multiple threads which will completely break
-  parking_lot's concurrency guarantees.
+unix, linux and Windows. Anything else fails to compile with a message saying
+so, rather than at a missing `slot::create` forty lines into a thread-local.
 
-To enable nightly-only functionality, you need to enable the `nightly` feature
-in Cargo (see below).
+## Testing
 
-## Usage
+Upstream's own unit tests run against the `no_std` code paths, not only against
+the default build: the crate is `no_std` on `all(not(feature = "std"),
+not(test))`, so the harness keeps its own prelude while the library under test
+is the patched one. `cargo check --no-default-features` is what proves the
+library does not link `std`, since a test binary cannot.
 
-Add this to your `Cargo.toml`:
+`tests/no_std_backends.rs` adds what a type check cannot see: that a waiter
+*blocks*. A lock whose waiters spin passes every correctness test and then
+burns tens of times the CPU under contention.
 
-```toml
-[dependencies]
-parking_lot = "0.12"
+## Benchmarks
+
+`benches/vs_parking_lot.rs` and `benches/burst.rs` dev-depend on the published
+`parking_lot` from crates.io, so clean upstream and this build link into one
+process and their arms interleave. Every table carries a `null` column, which is
+one arm measured twice, so noise is visible rather than assumed.
+
+```
+cargo bench --no-default-features
 ```
 
-To enable nightly-only features, add this to your `Cargo.toml` instead:
+They are never built or run in CI: they measure CPU with `getrusage`, so they
+are unix-only, and a shared runner cannot produce a lock benchmark worth
+reading.
 
-```toml
-[dependencies]
-parking_lot = { version = "0.12", features = ["nightly"] }
-```
+## Upstream
 
-The experimental deadlock detector can be enabled with the
-`deadlock_detection` Cargo feature.
+Forked at `parking_lot-v0.12.5-27-g9a125c8`, twenty-seven commits past the
+released 0.12.5. One further commit is cherry-picked: `77e184de`, "Fix WordLock
+queue unlock retries", from the open upstream PR #533.
 
-To allow sending `MutexGuard`s and `RwLock*Guard`s to other threads, enable the
-`send_guard` option.
+## Licence
 
-Note that the `deadlock_detection` and `send_guard` features are incompatible
-and cannot be used together.
-
-Hardware lock elision support for x86 can be enabled with the
-`hardware-lock-elision` feature. This requires Rust 1.59 due to the use of
-inline assembly.
-
-The core parking lot API is provided by the `parking_lot_core` crate. It is
-separate from the synchronization primitives in the `parking_lot` crate so that
-changes to the core API do not cause breaking changes for users of `parking_lot`.
-
-## Minimum Rust version
-
-The current minimum required Rust version is 1.84, but this may change at any time.
-
-## License
-
-Licensed under either of
-
- * Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or https://www.apache.org/licenses/LICENSE-2.0)
- * MIT license ([LICENSE-MIT](LICENSE-MIT) or https://opensource.org/licenses/MIT)
-
-at your option.
-
-### Contribution
-
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any
-additional terms or conditions.
+MIT or Apache-2.0, at your option, the same as upstream.

@@ -1,5 +1,5 @@
+use crate::time::Instant;
 use cfg_if::cfg_if;
-use std::time::Instant;
 
 /// Trait for the platform thread parker implementation.
 ///
@@ -60,25 +60,15 @@ cfg_if! {
     } else if #[cfg(windows)] {
         #[path = "windows/mod.rs"]
         mod imp;
-    } else if #[cfg(target_os = "redox")] {
-        #[path = "redox.rs"]
-        mod imp;
-    } else if #[cfg(all(target_env = "sgx", target_vendor = "fortanix"))] {
-        #[path = "sgx.rs"]
-        mod imp;
-    } else if #[cfg(all(
-        feature = "nightly",
-        target_family = "wasm",
-        target_feature = "atomics"
-    ))] {
-        #[path = "wasm_atomic.rs"]
-        mod imp;
-    } else if #[cfg(target_family = "wasm")] {
-        #[path = "wasm.rs"]
-        mod imp;
     } else {
-        #[path = "generic.rs"]
-        mod imp;
+        // Upstream falls through to wasm, SGX, Redox and a generic
+        // `std::thread::park` backend here. All four are gone: they are the
+        // backends that reach for `std`, and none of them is a target this
+        // fork builds for.
+        compile_error!(
+            "parking_lot_core supports linux, unix and Windows. The wasm, SGX, \
+             Redox and generic thread parkers are not carried in this fork."
+        );
     }
 }
 

@@ -5,15 +5,15 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use crate::time::Instant;
 #[cfg(target_vendor = "apple")]
 use core::ptr;
+use core::time::Duration;
 use core::{
     cell::{Cell, UnsafeCell},
     mem::MaybeUninit,
 };
 use libc;
-use std::time::Instant;
-use std::{thread, time::Duration};
 
 // x32 Linux uses a non-standard type for tv_nsec in timespec.
 // See https://sourceware.org/bugzilla/show_bug.cgi?id=16437
@@ -238,5 +238,12 @@ fn timeout_to_timespec(timeout: Duration) -> Option<libc::timespec> {
 
 #[inline]
 pub fn thread_yield() {
-    thread::yield_now();
+    // `std::thread::yield_now` is a `sched_yield` call.
+    #[cfg(feature = "std")]
+    std::thread::yield_now();
+    // SAFETY: no arguments, and no failure mode this cares about.
+    #[cfg(not(feature = "std"))]
+    unsafe {
+        libc::sched_yield();
+    }
 }

@@ -1,9 +1,9 @@
 name: Release-plz
 
+# Manual only in this fork. Upstream publishes from here; nothing should be
+# released from a fork on a push to master.
 on:
-  push:
-    branches:
-      - master
+  workflow_dispatch:
 
 jobs:
   release-plz-release:
