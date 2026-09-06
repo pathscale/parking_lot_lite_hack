@@ -33,6 +33,10 @@ libc = "0.2"
 # own parking lot.
 parking_lot = "0.12.5"
 spin = "0.9"
+# The lock-free alternative a consumer actually has. A `BTreeMap` behind a lock
+# is the shape this crate is for, not a structure anyone should prefer, so the
+# table needs an arm that is not a lock at all.
+arctic-wt = "0.1.9"
 rand = "0.8.3"
 
 [features]
