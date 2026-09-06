@@ -36,42 +36,57 @@ library with `std` switched off. 16 cores, aarch64, macOS, median of 5.
 | 128 | 24.4 | 29.3 | 24.4 | 29.3 | 22.7 | 331.2 | 1.00x |
 
 **Reader-writer lock.** 60000 operations on a 1024 entry map, 16 threads,
-writes as a fraction of operations. The work with no lock at all is 0.3 wall,
-2.0 cpu.
+writes as a fraction of operations. The same work with no lock at all is 0.3
+wall, 2.3 cpu.
 
-| writes/1000 | upstream wall | upstream cpu | this build wall | this build cpu | spin wall | spin cpu | null |
+| writes/1000 | upstream wall | upstream cpu | this build wall | this build cpu | arctic wall | arctic cpu | null |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| 0 | 9.4 | 130.9 | 9.3 | 131.4 | 6.3 | 89.5 | 1.06x |
-| 1 | 10.2 | 141.5 | 9.6 | 135.2 | 9.1 | 121.8 | 1.07x |
-| 10 | 9.6 | 124.2 | 9.3 | 115.7 | 15.4 | 228.9 | 1.03x |
-| 100 | 5.3 | 49.7 | 5.5 | 51.3 | 30.2 | 456.0 | 0.96x |
+| 0 | 9.7 | 142.7 | 10.3 | 154.9 | 0.2 | 1.0 | 0.95x |
+| 1 | 9.6 | 134.5 | 9.9 | 135.6 | 0.2 | 1.0 | 1.01x |
+| 10 | 9.1 | 106.6 | 9.1 | 114.6 | 0.2 | 1.0 | 0.97x |
+| 100 | 5.1 | 49.4 | 5.1 | 46.5 | 0.2 | 1.5 | 1.00x |
 
-Every difference between the two `parking_lot` columns is smaller than the null,
-which is one arm measured twice. Spin is in the table as context, and note what
-it costs: at 128 threads it burns 331 ms of CPU for 22.7 ms of wall clock, and
-with `std` on, where the run happened to be less lucky, 1105 ms for 73 ms.
+The two `parking_lot` columns are inside the null of each other, which is the
+result this crate needed. The third column is the one worth staring at.
+
 
 **The burst**, which is the workload this exists for. 200 symbols by 20 levels
 per burst, 4 writers, 4 readers, 20 bursts.
 
 | reader think time | backend | thru M/s | cpu ms | drain median | drain worst | p99.9 | max |
 |---|---|---:|---:|---:|---:|---:|---:|
-| 0 | upstream (std) | 3.30 | 6.50 | 1.21 | 1.36 | 0.042 | 0.123 |
-| 0 | this build | 3.42 | 6.21 | 1.17 | 1.27 | 0.039 | 0.078 |
-| 0 | spin | 0.15 | 197.55 | 26.75 | 42.08 | 0.664 | 2.307 |
-| 0 | null (upstream) | 3.52 | 6.11 | 1.14 | 1.25 | 0.038 | 0.080 |
-| 100 | upstream (std) | 4.03 | 5.74 | 0.99 | 1.07 | 0.031 | 0.075 |
-| 100 | this build | 3.83 | 5.84 | 1.04 | 1.15 | 0.033 | 0.064 |
-| 100 | null (upstream) | 3.93 | 5.75 | 1.02 | 1.08 | 0.033 | 0.064 |
-| 1000 | upstream (std) | 6.50 | 4.02 | 0.62 | 0.72 | 0.019 | 0.062 |
-| 1000 | this build | 6.46 | 4.06 | 0.62 | 0.69 | 0.019 | 0.058 |
-| 1000 | null (upstream) | 6.51 | 4.05 | 0.61 | 0.71 | 0.017 | 0.042 |
+| 0 | upstream (std) | 2.19 | 9.81 | 1.82 | 4.89 | 0.057 | 3.698 |
+| 0 | this build | 3.51 | 6.05 | 1.14 | 1.27 | 0.039 | 0.102 |
+| 0 | spin | 0.12 | 247.15 | 33.37 | 53.08 | 1.179 | 3.425 |
+| 0 | **arctic (lock-free)** | **30.39** | **0.80** | **0.13** | **0.16** | **0.000** | **0.001** |
+| 0 | null (upstream) | 3.54 | 5.93 | 1.13 | 1.23 | 0.037 | 0.081 |
+| 100 | upstream (std) | 3.96 | 5.71 | 1.01 | 1.12 | 0.033 | 0.070 |
+| 100 | this build | 3.98 | 5.76 | 1.01 | 1.10 | 0.033 | 0.065 |
+| 100 | **arctic (lock-free)** | **30.89** | **0.76** | **0.13** | **0.15** | **0.000** | **0.005** |
+| 100 | null (upstream) | 3.90 | 5.90 | 1.02 | 1.12 | 0.033 | 0.058 |
+| 1000 | upstream (std) | 6.25 | 4.21 | 0.64 | 0.74 | 0.019 | 0.051 |
+| 1000 | this build | 6.23 | 4.25 | 0.64 | 0.74 | 0.019 | 0.074 |
+| 1000 | **arctic (lock-free)** | **30.13** | **0.78** | **0.13** | **0.15** | **0.000** | **0.007** |
+| 1000 | null (upstream) | 6.29 | 4.16 | 0.64 | 0.74 | 0.019 | 0.069 |
 
-The null arm earns its place here. Without it the first run of this table read
-2.30 M/s for upstream against 3.53 for this build at think time 0, a 53% win
-that would have been a lie: the first arm measured pays the cold start, and
-with the null in place upstream reads 3.30 and 3.52 on either side of this
-build's 3.42.
+The `upstream (std)` row at think time 0 reads 2.19 M/s with a 4.89 ms worst
+drain, and the same arm measured again at the bottom of that block reads 3.54
+and 1.23. That is the cold start on the first arm, not a difference between the
+two builds, and it is why the null arm is there.
+
+## What Arctic says, and what it does not
+
+Arctic is a lock-free adaptive radix tree, and on both shapes it is not close:
+roughly 48x the wall clock and 140x the CPU on the read-mostly map, 5 to 8x the
+burst throughput, and a maximum update latency of 1 to 7 microseconds against
+this build's 65 to 106.
+
+That is the honest context for everything above. A `BTreeMap` behind a
+reader-writer lock is the *shape* this crate exists to serve, and it is not a
+structure to reach for when a lock-free ordered map is available. What the
+`parking_lot` columns establish is narrower and still worth having: for code
+that does hold a lock, switching `std` off costs nothing.
+
 
 Run again with `std` on, the two `parking_lot` columns stay together the same
 way, so the code is indifferent to the feature rather than the benchmark being

@@ -3,9 +3,9 @@
 //! # What this is for
 //!
 //! Switching `std` off must not cost anything, and the way to know is to
-//! measure the same two shapes with it on and with it off. `spin` is the other
-//! column, so the result is read against something rather than quoted on its
-//! own.
+//! measure the same two shapes with it on and with it off. `spin` and Arctic
+//! are the other columns, so the result is read against something rather than
+//! quoted on its own.
 //!
 //! It is sized to finish in a few seconds, so it can run on every change
 //! rather than being the thing nobody runs. That budget buys relative
@@ -28,14 +28,18 @@
 //! than the work it guards, because reader counts and fairness state live on
 //! one cache line that every reader writes to.
 //!
-//! # The floor is a column, not an arm
+//! # The floor, and the arm that beats it
 //!
-//! One row of the reader-writer table is the same lookups with no lock at all,
-//! over a `&BTreeMap` nobody mutates. Whatever an arm costs above that is what
-//! its synchronisation costs, and at zero writes that is synchronisation
-//! against a writer that never arrives. It is worth having on the page because
-//! the answer is uncomfortable: every real lock here spends roughly thirty
-//! times the floor's CPU on a read-mostly map.
+//! One line under the reader-writer table is the same lookups with no lock at
+//! all, over a `&BTreeMap` nobody mutates. Whatever an arm costs above that is
+//! what its synchronisation costs, and at zero writes that is synchronisation
+//! against a writer that never arrives.
+//!
+//! Arctic, a lock-free adaptive radix tree, is in the table because it beats
+//! that floor while still taking writes. Read the two `parking_lot` columns
+//! against each other to see what `std` costs, which is nothing, and then read
+//! the whole pair against Arctic to see what taking a lock costs, which is not
+//! nothing.
 //!
 //! An `ArcSwap` arm used to sit next to it, reaching the floor exactly. It was
 //! removed rather than kept as an aspiration, because a snapshot is not a
@@ -159,7 +163,41 @@ macro_rules! map_arm {
 
 map_arm!(map_upstream, parking_lot::RwLock<Map>);
 map_arm!(map_a, parking_lot_lite_hack::RwLock<Map>);
-map_arm!(map_spin, spin::RwLock<Map>);
+
+/// Arctic, a lock-free adaptive radix tree, doing the same work with no lock.
+///
+/// This arm is not a competitor to the two `parking_lot` columns, it is the
+/// question they should be read against. A `BTreeMap` behind a reader-writer
+/// lock is the *shape* this crate exists to serve, not a structure anyone
+/// should reach for when a lock-free ordered map is available: the locked arms
+/// pay coordination on every operation and this one does not.
+fn map_arctic(threads: usize, writes_per_1000: u64) -> (Duration, Duration) {
+    let map = arctic::ConcurrentMap::<u64, u64>::default();
+    for key in 0..ENTRIES {
+        map.upsert(key, key.wrapping_mul(31));
+    }
+    let map = &map;
+    let before = cpu();
+    let now = Instant::now();
+    std::thread::scope(|scope| {
+        for worker in 0..threads {
+            scope.spawn(move || {
+                let mut acc = 0u64;
+                let mut rng = seeded(worker);
+                for _ in 0..OPS / threads {
+                    let r = roll(&mut rng);
+                    if r % 1000 < writes_per_1000 {
+                        map.upsert(r % ENTRIES, r);
+                    } else if let Some(found) = map.get(&(r % ENTRIES)) {
+                        acc ^= *found;
+                    }
+                }
+                black_box(acc);
+            });
+        }
+    });
+    (now.elapsed(), cpu() - before)
+}
 
 /// The same lookups with no lock at all: the floor.
 ///
@@ -240,14 +278,14 @@ fn main() {
         ms(floor.0),
         ms(floor.1)
     );
-    println!("       upstream (std)       this build            spin (context)");
+    println!("       upstream (std)       this build           arctic (lock-free)");
     println!("  wr/1000    wall      cpu      wall      cpu      wall      cpu    null");
     for &writes in &RATIOS {
         let mut runs: Vec<Vec<(Duration, Duration)>> = vec![Vec::new(); 4];
         for _ in 0..REPS {
             runs[0].push(map_upstream(cores, writes));
             runs[1].push(map_a(cores, writes));
-            runs[2].push(map_spin(cores, writes));
+            runs[2].push(map_arctic(cores, writes));
             runs[3].push(map_upstream(cores, writes));
         }
         let m: Vec<_> = runs.into_iter().map(median).collect();

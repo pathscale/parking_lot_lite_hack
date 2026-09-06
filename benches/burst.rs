@@ -143,6 +143,65 @@ burst_arm!(burst_upstream, parking_lot::RwLock<Book>);
 burst_arm!(burst_parking, parking_lot_lite_hack::RwLock<Book>);
 burst_arm!(burst_spin, spin::RwLock<Book>);
 
+/// Arctic, lock-free, on the same burst. Not an arm of this crate: the question
+/// this crate should be read against.
+fn burst_arctic(think: u32) -> (Duration, Duration, Vec<Duration>) {
+    let book = arctic::ConcurrentMap::<u64, u64>::default();
+    for key in 0..SYMBOLS * LEVELS {
+        book.upsert(key, key.wrapping_mul(31));
+    }
+    let book = &book;
+    let stop = Arc::new(core::sync::atomic::AtomicBool::new(false));
+    let samples = Arc::new(std::sync::Mutex::new(Vec::<Duration>::new()));
+
+    let before = cpu();
+    let started = Instant::now();
+    std::thread::scope(|scope| {
+        for _ in 0..READERS {
+            let stop = Arc::clone(&stop);
+            scope.spawn(move || {
+                let mut acc = 0u64;
+                let mut key = 0u64;
+                while !stop.load(core::sync::atomic::Ordering::Relaxed) {
+                    key = key.wrapping_add(2_654_435_761) % (SYMBOLS * LEVELS);
+                    if let Some(found) = book.get(&key) {
+                        acc ^= *found;
+                    }
+                    for _ in 0..think {
+                        core::hint::spin_loop();
+                    }
+                }
+                black_box(acc);
+            });
+        }
+        let handles: Vec<_> = (0..WRITERS)
+            .map(|w| {
+                let samples = Arc::clone(&samples);
+                scope.spawn(move || {
+                    let mut mine = Vec::with_capacity((SYMBOLS / WRITERS as u64 * LEVELS) as usize);
+                    let per = SYMBOLS / WRITERS as u64;
+                    let from = w as u64 * per;
+                    for symbol in from..from + per {
+                        for level in 0..LEVELS {
+                            let key = symbol * LEVELS + level;
+                            let at = Instant::now();
+                            book.upsert(key, key.wrapping_mul(0x9e37_79b9));
+                            mine.push(at.elapsed());
+                        }
+                    }
+                    samples.lock().expect("not poisoned").extend(mine);
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("writer");
+        }
+        stop.store(true, core::sync::atomic::Ordering::Relaxed);
+    });
+    let latencies = core::mem::take(&mut *samples.lock().expect("not poisoned"));
+    (started.elapsed(), cpu() - before, latencies)
+}
+
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1e3
 }
@@ -183,6 +242,7 @@ fn main() {
                 burst_parking as fn(u32) -> (Duration, Duration, Vec<Duration>),
             ),
             ("spin", burst_spin),
+            ("arctic (lock-free)", burst_arctic),
             // The first arm again, last, so the table carries its own noise
             // floor: whatever this differs from `upstream (std)` by is drift,
             // not a result.
