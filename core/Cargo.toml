@@ -2,13 +2,13 @@
 name = "parking_lot_lite_hack_core"
 version = "0.9.12"
 authors = ["Amanieu d'Antras <amanieu@gmail.com>"]
-description = "An advanced API for creating custom synchronization primitives."
+description = "parking_lot_core without std, for parking_lot_lite_hack"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/Amanieu/parking_lot"
-keywords = ["mutex", "condvar", "rwlock", "once", "thread"]
-categories = ["concurrency"]
+repository = "https://github.com/pathscale/parking_lot_lite_hack"
+keywords = ["mutex", "rwlock", "no-std", "parking-lot"]
+categories = ["concurrency", "no-std"]
 edition = "2021"
-rust-version = "1.71.0"
+rust-version = "1.84"
 
 [package.metadata.docs.rs]
 rustdoc-args = ["--generate-link-to-definition"]
