@@ -1,42 +1,56 @@
 [package]
-name = "parking_lot"
+name = "parking_lot_lite_hack"
 version = "0.12.5"
 authors = ["Amanieu d'Antras <amanieu@gmail.com>"]
-description = "More compact and efficient implementations of the standard synchronization primitives."
+description = "parking_lot's Mutex and RwLock, without std"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Amanieu/parking_lot"
 readme = "README.md"
-keywords = ["mutex", "condvar", "rwlock", "once", "thread"]
-categories = ["concurrency"]
+keywords = ["mutex", "rwlock", "no-std", "lock-api", "parking-lot"]
+categories = ["concurrency", "no-std"]
 edition = "2021"
 rust-version = "1.84"
 
 [package.metadata.docs.rs]
-features = ["arc_lock", "serde", "deadlock_detection"]
+features = ["arc_lock", "send_guard"]
 rustdoc-args = ["--generate-link-to-definition"]
 
 [package.metadata.playground]
-features = ["arc_lock", "serde", "deadlock_detection"]
+features = ["arc_lock", "send_guard"]
 
 [dependencies]
-parking_lot_core = { path = "core", version = "0.9.12" }
+parking_lot_core = { package = "parking_lot_lite_hack_core", path = "core", version = "0.9.12" }
 lock_api = { path = "lock_api", version = "0.4.14" }
 
 [dev-dependencies]
+# Benchmark arms and the CPU clock. `spin` is the other `lock_api` backend
+# worth measuring against; `libc` is `getrusage`, because wall clock cannot
+# see a burnt core.
+libc = "0.2"
+# The published crate, under another name, so a benchmark can run clean
+# upstream and this build in one process and interleave them. Two copies of
+# `parking_lot_core` end up linked, which is exactly right: each arm uses its
+# own parking lot.
+parking_lot = "0.12.5"
+spin = "0.9"
 rand = "0.8.3"
 
-# Used when testing out serde support.
-postcard = {version = "1.1.3", default-features = false, features = ["use-std"]}
-
 [features]
-default = []
+default = ["std"]
+
+# Off, this crate does not link `std`. See `parking_lot_core`'s feature of the
+# same name for what changes.
+std = ["parking_lot_core/std"]
 arc_lock = ["lock_api/arc_lock"]
-owning_ref = ["lock_api/owning_ref"]
-nightly = ["parking_lot_core/nightly", "lock_api/nightly"]
-deadlock_detection = ["parking_lot_core/deadlock_detection"]
-serde = ["lock_api/serde"]
 send_guard = []
-hardware-lock-elision = []
 
 [workspace]
 exclude = ["benchmark"]
+
+[[bench]]
+name = "vs_parking_lot"
+harness = false
+
+[[bench]]
+name = "burst"
+harness = false

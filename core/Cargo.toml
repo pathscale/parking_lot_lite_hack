@@ -1,5 +1,5 @@
 [package]
-name = "parking_lot_core"
+name = "parking_lot_lite_hack_core"
 version = "0.9.12"
 authors = ["Amanieu d'Antras <amanieu@gmail.com>"]
 description = "An advanced API for creating custom synchronization primitives."
@@ -16,8 +16,6 @@ rustdoc-args = ["--generate-link-to-definition"]
 [dependencies]
 cfg-if = "1.0.0"
 smallvec = "1.6.1"
-petgraph = { version = "0.6.0", optional = true }
-backtrace = { version = "0.3.60", optional = true }
 
 [target.'cfg(target_os = "aix")'.dependencies]
 libc = "0.2.181"
@@ -25,12 +23,26 @@ libc = "0.2.181"
 [target.'cfg(all(unix, not(target_os = "aix")))'.dependencies]
 libc = "0.2.95"
 
-[target.'cfg(target_os = "redox")'.dependencies]
-redox_syscall = "0.5"
 
 [target.'cfg(windows)'.dependencies]
 windows-link = "0.2.0"
+# `FlsAlloc` and `QueryPerformanceCounter`, for the `no_std` thread-local and
+# clock. Unused when `std` is on.
+windows-sys = { version = "0.60", features = [
+    "Win32_System_Threading",
+    "Win32_System_Performance",
+] }
 
 [features]
-nightly = []
-deadlock_detection = ["petgraph", "backtrace"]
+default = ["std"]
+
+# Off, this crate does not link `std`. It still blocks in the kernel: `libc`
+# with default features off is itself `no_std`, so the constraint was never
+# `no_std`, it was having an operating system.
+#
+# What changes without it: `thread_local!` becomes a `pthread_key_t` (an
+# `FlsAlloc` slot on Windows), `std::time::Instant` becomes a monotonic clock
+# reading, and deadlock detection is unavailable, since it is the only thing
+# here that needs `HashSet`, `mpsc` and `ThreadId`.
+std = []
+

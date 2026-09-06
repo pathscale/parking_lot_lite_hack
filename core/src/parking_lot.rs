@@ -5,40 +5,20 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 use crate::thread_parker::{ThreadParker, ThreadParkerT, UnparkHandleT};
+use crate::time::Instant;
 use crate::util::UncheckedOptionExt;
 use crate::word_lock::WordLock;
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use core::time::Duration;
 use core::{
     cell::{Cell, UnsafeCell},
     ptr,
     sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
 use smallvec::SmallVec;
-use std::time::{Duration, Instant};
 
-// Don't use Instant on wasm32-unknown-unknown, it just panics.
-cfg_if::cfg_if! {
-    if #[cfg(all(
-        target_family = "wasm",
-        target_os = "unknown",
-        target_vendor = "unknown"
-    ))] {
-        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-        struct TimeoutInstant;
-        impl TimeoutInstant {
-            fn now() -> TimeoutInstant {
-                TimeoutInstant
-            }
-        }
-        impl core::ops::Add<Duration> for TimeoutInstant {
-            type Output = Self;
-            fn add(self, _rhs: Duration) -> Self::Output {
-                TimeoutInstant
-            }
-        }
-    } else {
-        use std::time::Instant as TimeoutInstant;
-    }
-}
+use crate::time::Instant as TimeoutInstant;
 
 static NUM_THREADS: AtomicUsize = AtomicUsize::new(0);
 
@@ -166,10 +146,7 @@ struct ThreadData {
 
     // Is the thread parked with a timeout?
     parked_with_timeout: Cell<bool>,
-
     // Extra data for deadlock detection
-    #[cfg(feature = "deadlock_detection")]
-    deadlock_data: deadlock::DeadlockData,
 }
 
 impl ThreadData {
@@ -186,8 +163,6 @@ impl ThreadData {
             unpark_token: Cell::new(DEFAULT_UNPARK_TOKEN),
             park_token: Cell::new(DEFAULT_PARK_TOKEN),
             parked_with_timeout: Cell::new(false),
-            #[cfg(feature = "deadlock_detection")]
-            deadlock_data: deadlock::DeadlockData::new(),
         }
     }
 }
@@ -199,10 +174,22 @@ fn with_thread_data<T>(f: impl FnOnce(&ThreadData) -> T) -> T {
     // to construct. Try to use a thread-local version if possible. Otherwise just
     // create a ThreadData on the stack
     let mut thread_data_storage = None;
-    thread_local!(static THREAD_DATA: ThreadData = ThreadData::new());
-    let thread_data_ptr = THREAD_DATA
-        .try_with(|x| x as *const ThreadData)
-        .unwrap_or_else(|_| thread_data_storage.get_or_insert_with(ThreadData::new));
+    #[cfg(feature = "std")]
+    let thread_data_ptr = {
+        thread_local!(static THREAD_DATA: ThreadData = ThreadData::new());
+        THREAD_DATA
+            .try_with(|x| x as *const ThreadData)
+            .unwrap_or_else(|_| thread_data_storage.get_or_insert_with(ThreadData::new))
+    };
+    // Without `std` the same slot is a `pthread_key_t`, which is what
+    // `thread_local!` lowers to for a type with a destructor.
+    #[cfg(not(feature = "std"))]
+    let thread_data_ptr = {
+        static THREAD_DATA: crate::tls::Tls<ThreadData> = crate::tls::Tls::new();
+        THREAD_DATA
+            .with(ThreadData::new, |x| x as *const ThreadData)
+            .unwrap_or_else(|| thread_data_storage.get_or_insert_with(ThreadData::new))
+    };
 
     f(unsafe { &*thread_data_ptr })
 }
@@ -1091,339 +1078,32 @@ pub unsafe fn unpark_filter(
 
     result
 }
-
-/// \[Experimental\] Deadlock detection
+/// Deadlock detection, which this fork does not do.
 ///
-/// Enabled via the `deadlock_detection` feature flag.
+/// Upstream's detector is the only thing in this crate that needs `HashSet`,
+/// `mpsc` and `ThreadId`, which is to say it is the only thing that needs
+/// `std`. It is gone, and these are the no-op calls that upstream compiles
+/// when its `deadlock_detection` feature is off, kept so that `raw_mutex.rs`
+/// and `raw_rwlock.rs` stay as upstream wrote them.
 pub mod deadlock {
-    #[cfg(feature = "deadlock_detection")]
-    use super::deadlock_impl;
-
-    #[cfg(feature = "deadlock_detection")]
-    pub(super) use super::deadlock_impl::DeadlockData;
-
-    /// Acquire a resource identified by key in the deadlock detector
-    /// Noop if `deadlock_detection` feature isn't enabled.
+    /// Acquire a resource identified by key in the deadlock detector. Noop.
     ///
     /// # Safety
     ///
     /// Call after the resource is acquired
     #[inline]
-    pub unsafe fn acquire_resource(_key: usize) {
-        #[cfg(feature = "deadlock_detection")]
-        deadlock_impl::acquire_resource(_key);
-    }
+    pub unsafe fn acquire_resource(_key: usize) {}
 
-    /// Release a resource identified by key in the deadlock detector.
-    /// Noop if `deadlock_detection` feature isn't enabled.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the resource was already released or wasn't acquired in this thread.
+    /// Release a resource identified by key in the deadlock detector. Noop.
     ///
     /// # Safety
     ///
     /// Call before the resource is released
     #[inline]
-    pub unsafe fn release_resource(_key: usize) {
-        #[cfg(feature = "deadlock_detection")]
-        deadlock_impl::release_resource(_key);
-    }
-
-    /// Returns all deadlocks detected *since* the last call.
-    /// Each cycle consist of a vector of `DeadlockedThread`.
-    #[cfg(feature = "deadlock_detection")]
-    #[inline]
-    pub fn check_deadlock() -> Vec<Vec<deadlock_impl::DeadlockedThread>> {
-        deadlock_impl::check_deadlock()
-    }
+    pub unsafe fn release_resource(_key: usize) {}
 
     #[inline]
-    pub(super) unsafe fn on_unpark(_td: &super::ThreadData) {
-        #[cfg(feature = "deadlock_detection")]
-        deadlock_impl::on_unpark(_td);
-    }
-}
-
-#[cfg(feature = "deadlock_detection")]
-mod deadlock_impl {
-    use super::{get_hashtable, lock_bucket, with_thread_data, ThreadData, NUM_THREADS};
-    use crate::thread_parker::{ThreadParkerT, UnparkHandleT};
-    use crate::word_lock::WordLock;
-    use backtrace::Backtrace;
-    use petgraph;
-    use petgraph::graphmap::DiGraphMap;
-    use std::cell::{Cell, UnsafeCell};
-    use std::collections::HashSet;
-    use std::sync::atomic::Ordering;
-    use std::sync::mpsc;
-    use std::thread::ThreadId;
-
-    /// Representation of a deadlocked thread
-    pub struct DeadlockedThread {
-        thread_id: ThreadId,
-        backtrace: Backtrace,
-    }
-
-    impl DeadlockedThread {
-        /// The system thread id
-        pub fn thread_id(&self) -> ThreadId {
-            self.thread_id
-        }
-
-        /// The thread backtrace
-        pub fn backtrace(&self) -> &Backtrace {
-            &self.backtrace
-        }
-    }
-
-    pub struct DeadlockData {
-        // Currently owned resources (keys)
-        resources: UnsafeCell<Vec<usize>>,
-
-        // Set when there's a pending callstack request
-        deadlocked: Cell<bool>,
-
-        // Sender used to report the backtrace
-        backtrace_sender: UnsafeCell<Option<mpsc::Sender<DeadlockedThread>>>,
-
-        // System thread id
-        thread_id: ThreadId,
-    }
-
-    impl DeadlockData {
-        pub fn new() -> Self {
-            DeadlockData {
-                resources: UnsafeCell::new(Vec::new()),
-                deadlocked: Cell::new(false),
-                backtrace_sender: UnsafeCell::new(None),
-                thread_id: std::thread::current().id(),
-            }
-        }
-    }
-
-    pub(super) unsafe fn on_unpark(td: &ThreadData) {
-        if td.deadlock_data.deadlocked.get() {
-            let sender = (*td.deadlock_data.backtrace_sender.get()).take().unwrap();
-            sender
-                .send(DeadlockedThread {
-                    thread_id: td.deadlock_data.thread_id,
-                    backtrace: Backtrace::new(),
-                })
-                .unwrap();
-            // make sure to close this sender
-            drop(sender);
-
-            // park until the end of the time
-            td.parker.prepare_park();
-            td.parker.park();
-            unreachable!("unparked deadlocked thread!");
-        }
-    }
-
-    pub unsafe fn acquire_resource(key: usize) {
-        with_thread_data(|thread_data| {
-            (*thread_data.deadlock_data.resources.get()).push(key);
-        });
-    }
-
-    pub unsafe fn release_resource(key: usize) {
-        with_thread_data(|thread_data| {
-            let resources = &mut (*thread_data.deadlock_data.resources.get());
-
-            // There is only one situation where we can fail to find the
-            // resource: we are currently running TLS destructors and our
-            // ThreadData has already been freed. There isn't much we can do
-            // about it at this point, so just ignore it.
-            if let Some(p) = resources.iter().rposition(|x| *x == key) {
-                resources.swap_remove(p);
-            }
-        });
-    }
-
-    pub fn check_deadlock() -> Vec<Vec<DeadlockedThread>> {
-        unsafe {
-            // fast pass
-            if check_wait_graph_fast() {
-                // double check
-                check_wait_graph_slow()
-            } else {
-                Vec::new()
-            }
-        }
-    }
-
-    // Simple algorithm that builds a wait graph f the threads and the resources,
-    // then checks for the presence of cycles (deadlocks).
-    // This variant isn't precise as it doesn't lock the entire table before checking
-    unsafe fn check_wait_graph_fast() -> bool {
-        let table = get_hashtable();
-        let thread_count = NUM_THREADS.load(Ordering::Relaxed);
-        let mut graph = DiGraphMap::<usize, ()>::with_capacity(thread_count * 2, thread_count * 2);
-
-        for b in &(*table).entries[..] {
-            b.mutex.lock();
-            let mut current = b.queue_head.get();
-            while !current.is_null() {
-                if !(*current).parked_with_timeout.get()
-                    && !(*current).deadlock_data.deadlocked.get()
-                {
-                    // .resources are waiting for their owner
-                    for &resource in &(*(*current).deadlock_data.resources.get()) {
-                        graph.add_edge(resource, current as usize, ());
-                    }
-                    // owner waits for resource .key
-                    graph.add_edge(current as usize, (*current).key.load(Ordering::Relaxed), ());
-                }
-                current = (*current).next_in_queue.get();
-            }
-            // SAFETY: We hold the lock here, as required
-            b.mutex.unlock();
-        }
-
-        petgraph::algo::is_cyclic_directed(&graph)
-    }
-
-    #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Copy, Clone)]
-    enum WaitGraphNode {
-        Thread(*const ThreadData),
-        Resource(usize),
-    }
-
-    use self::WaitGraphNode::*;
-
-    // Contrary to the _fast variant this locks the entries table before looking for cycles.
-    // Returns all detected thread wait cycles.
-    // Note that once a cycle is reported it's never reported again.
-    unsafe fn check_wait_graph_slow() -> Vec<Vec<DeadlockedThread>> {
-        static DEADLOCK_DETECTION_LOCK: WordLock = WordLock::new();
-        DEADLOCK_DETECTION_LOCK.lock();
-
-        let mut table = get_hashtable();
-        loop {
-            // Lock all buckets in the old table
-            for b in &table.entries[..] {
-                b.mutex.lock();
-            }
-
-            // Now check if our table is still the latest one. Another thread could
-            // have grown the hash table between us getting and locking the hash table.
-            let new_table = get_hashtable();
-            if new_table as *const _ == table as *const _ {
-                break;
-            }
-
-            // Unlock buckets and try again
-            for b in &table.entries[..] {
-                // SAFETY: We hold the lock here, as required
-                b.mutex.unlock();
-            }
-
-            table = new_table;
-        }
-
-        let thread_count = NUM_THREADS.load(Ordering::Relaxed);
-        let mut graph =
-            DiGraphMap::<WaitGraphNode, ()>::with_capacity(thread_count * 2, thread_count * 2);
-
-        for b in &table.entries[..] {
-            let mut current = b.queue_head.get();
-            while !current.is_null() {
-                if !(*current).parked_with_timeout.get()
-                    && !(*current).deadlock_data.deadlocked.get()
-                {
-                    // .resources are waiting for their owner
-                    for &resource in &(*(*current).deadlock_data.resources.get()) {
-                        graph.add_edge(Resource(resource), Thread(current), ());
-                    }
-                    // owner waits for resource .key
-                    graph.add_edge(
-                        Thread(current),
-                        Resource((*current).key.load(Ordering::Relaxed)),
-                        (),
-                    );
-                }
-                current = (*current).next_in_queue.get();
-            }
-        }
-
-        for b in &table.entries[..] {
-            // SAFETY: We hold the lock here, as required
-            b.mutex.unlock();
-        }
-
-        // find cycles
-        let cycles = graph_cycles(&graph);
-
-        let mut results = Vec::with_capacity(cycles.len());
-
-        for cycle in cycles {
-            let (sender, receiver) = mpsc::channel();
-            for td in cycle {
-                let bucket = lock_bucket((*td).key.load(Ordering::Relaxed));
-                (*td).deadlock_data.deadlocked.set(true);
-                *(*td).deadlock_data.backtrace_sender.get() = Some(sender.clone());
-                let handle = (*td).parker.unpark_lock();
-                // SAFETY: We hold the lock here, as required
-                bucket.mutex.unlock();
-                // unpark the deadlocked thread!
-                // on unpark it'll notice the deadlocked flag and report back
-                handle.unpark();
-            }
-            // make sure to drop our sender before collecting results
-            drop(sender);
-            results.push(receiver.iter().collect());
-        }
-
-        DEADLOCK_DETECTION_LOCK.unlock();
-
-        results
-    }
-
-    // normalize a cycle to start with the "smallest" node
-    fn normalize_cycle<T: Ord + Copy + Clone>(input: &[T]) -> Vec<T> {
-        let min_pos = input
-            .iter()
-            .enumerate()
-            .min_by_key(|&(_, &t)| t)
-            .map(|(p, _)| p)
-            .unwrap_or(0);
-        input
-            .iter()
-            .cycle()
-            .skip(min_pos)
-            .take(input.len())
-            .cloned()
-            .collect()
-    }
-
-    // returns all thread cycles in the wait graph
-    fn graph_cycles(g: &DiGraphMap<WaitGraphNode, ()>) -> Vec<Vec<*const ThreadData>> {
-        use petgraph::visit::depth_first_search;
-        use petgraph::visit::DfsEvent;
-        use petgraph::visit::NodeIndexable;
-
-        let mut cycles = HashSet::new();
-        let mut path = Vec::with_capacity(g.node_bound());
-        // start from threads to get the correct threads cycle
-        let threads = g
-            .nodes()
-            .filter(|n| if let &Thread(_) = n { true } else { false });
-
-        depth_first_search(g, threads, |e| match e {
-            DfsEvent::Discover(Thread(n), _) => path.push(n),
-            DfsEvent::Finish(Thread(_), _) => {
-                path.pop();
-            }
-            DfsEvent::BackEdge(_, Thread(n)) => {
-                let from = path.iter().rposition(|&i| i == n).unwrap();
-                cycles.insert(normalize_cycle(&path[from..]));
-            }
-            _ => (),
-        });
-
-        cycles.iter().cloned().collect()
-    }
+    pub(super) unsafe fn on_unpark(_td: &super::ThreadData) {}
 }
 
 #[cfg(test)]

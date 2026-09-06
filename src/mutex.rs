@@ -52,7 +52,7 @@ use crate::raw_mutex::RawMutex;
 /// # Examples
 ///
 /// ```
-/// use parking_lot::Mutex;
+/// use parking_lot_lite_hack::Mutex;
 /// use std::sync::{Arc, mpsc::channel};
 /// use std::thread;
 ///
@@ -110,7 +110,7 @@ pub type MappedMutexGuard<'a, T> = lock_api::MappedMutexGuard<'a, RawMutex, T>;
 
 #[cfg(test)]
 mod tests {
-    use crate::{Condvar, MappedMutexGuard, Mutex, MutexGuard};
+    use crate::{MappedMutexGuard, Mutex, MutexGuard};
     use std::collections::HashMap;
     use std::ops::Deref;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -118,16 +118,8 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
 
-    #[cfg(feature = "serde")]
-    use postcard::{from_bytes, to_stdvec};
-
-    struct Packet<T>(Arc<(Mutex<T>, Condvar)>);
-
     #[derive(Eq, PartialEq, Debug)]
     struct NonCopy(i32);
-
-    unsafe impl<T: Send> Send for Packet<T> {}
-    unsafe impl<T> Sync for Packet<T> {}
 
     #[test]
     fn smoke() {
@@ -210,29 +202,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mutex_arc_condvar() {
-        let packet = Packet(Arc::new((Mutex::new(false), Condvar::new())));
-        let packet2 = Packet(packet.0.clone());
-        let (tx, rx) = channel();
-        let _t = thread::spawn(move || {
-            // wait until parent gets in
-            rx.recv().unwrap();
-            let (lock, cvar) = &*packet2.0;
-            let mut lock = lock.lock();
-            *lock = true;
-            cvar.notify_one();
-        });
-
-        let (lock, cvar) = &*packet.0;
-        let mut lock = lock.lock();
-        tx.send(()).unwrap();
-        assert!(!*lock);
-        while !*lock {
-            cvar.wait(&mut lock);
-        }
-    }
-
-    #[test]
     fn test_mutex_arc_nested() {
         // Tests nested mutexes and access
         // to underlying data.
@@ -296,19 +265,6 @@ mod tests {
         assert_eq!(format!("{:?}", mutex), "Mutex { data: [0, 10] }");
         let _lock = mutex.lock();
         assert_eq!(format!("{:?}", mutex), "Mutex { data: <locked> }");
-    }
-
-    #[cfg(feature = "serde")]
-    #[test]
-    fn test_serde() {
-        let contents: Vec<u8> = vec![0, 1, 2];
-        let mutex = Mutex::new(contents.clone());
-
-        let serialized = to_stdvec(&mutex).unwrap();
-        let deserialized: Mutex<Vec<u8>> = from_bytes(&serialized).unwrap();
-
-        assert_eq!(*(mutex.lock()), *(deserialized.lock()));
-        assert_eq!(contents, *(deserialized.lock()));
     }
 
     #[test]

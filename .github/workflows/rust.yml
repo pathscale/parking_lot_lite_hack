@@ -1,11 +1,10 @@
 name: Rust
 
+# Upstream runs this on every push and pull request across a matrix of GitHub
+# runners. In this fork it is manual: the no-std.yml workflow covers what this
+# change can break, on one ubicloud runner.
 on:
-  push:
-    branches:
-      - trying
-      - staging
-  pull_request:
+  workflow_dispatch:
 
 env:
   CARGO_INCREMENTAL: 0

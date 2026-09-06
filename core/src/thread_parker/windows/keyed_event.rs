@@ -5,13 +5,13 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use crate::time::Instant;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{
     ffi,
     mem::{self, MaybeUninit},
     ptr,
 };
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
 
 const STATE_UNPARKED: usize = 0;
 const STATE_PARKED: usize = 1;

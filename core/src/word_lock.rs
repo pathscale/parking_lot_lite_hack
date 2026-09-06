@@ -82,9 +82,21 @@ fn with_thread_data<T>(f: impl FnOnce(&ThreadData) -> T) -> T {
     // If ThreadData is expensive to construct, then we want to use a cached
     // version in thread-local storage if possible.
     if !ThreadParker::IS_CHEAP_TO_CONSTRUCT {
-        thread_local!(static THREAD_DATA: ThreadData = ThreadData::new());
-        if let Ok(tls_thread_data) = THREAD_DATA.try_with(|x| x as *const ThreadData) {
-            thread_data_ptr = tls_thread_data;
+        #[cfg(feature = "std")]
+        {
+            thread_local!(static THREAD_DATA: ThreadData = ThreadData::new());
+            if let Ok(tls_thread_data) = THREAD_DATA.try_with(|x| x as *const ThreadData) {
+                thread_data_ptr = tls_thread_data;
+            }
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            static THREAD_DATA: crate::tls::Tls<ThreadData> = crate::tls::Tls::new();
+            if let Some(tls_thread_data) =
+                THREAD_DATA.with(ThreadData::new, |x| x as *const ThreadData)
+            {
+                thread_data_ptr = tls_thread_data;
+            }
         }
     }
     // Otherwise just create a ThreadData on the stack

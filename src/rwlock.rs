@@ -66,7 +66,7 @@ use crate::raw_rwlock::RawRwLock;
 /// # Examples
 ///
 /// ```
-/// use parking_lot::RwLock;
+/// use parking_lot_lite_hack::RwLock;
 ///
 /// let lock = RwLock::new(5);
 ///
@@ -133,9 +133,6 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
-
-    #[cfg(feature = "serde")]
-    use postcard::{from_bytes, to_stdvec};
 
     #[derive(Eq, PartialEq, Debug)]
     struct NonCopy(i32);
@@ -582,19 +579,6 @@ mod tests {
         let a = rwlock.read_recursive();
         let b = a.clone();
         assert_eq!(Arc::strong_count(&b), 2);
-    }
-
-    #[cfg(feature = "serde")]
-    #[test]
-    fn test_serde() {
-        let contents: Vec<u8> = vec![0, 1, 2];
-        let mutex = RwLock::new(contents.clone());
-
-        let serialized = to_stdvec(&mutex).unwrap();
-        let deserialized: RwLock<Vec<u8>> = from_bytes(&serialized).unwrap();
-
-        assert_eq!(*(mutex.read()), *(deserialized.read()));
-        assert_eq!(contents, *(deserialized.read()));
     }
 
     #[test]

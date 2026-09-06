@@ -5,13 +5,12 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use crate::time::Instant;
 use core::{
     ptr,
     sync::atomic::{AtomicI32, Ordering},
 };
 use libc;
-use std::thread;
-use std::time::Instant;
 
 // x32 Linux uses a non-standard type for tv_nsec in timespec.
 // See https://sourceware.org/bugzilla/show_bug.cgi?id=16437
@@ -81,7 +80,7 @@ impl super::ThreadParkerT for ThreadParker {
                 return true;
             }
             // SAFETY: libc::timespec is zero initializable.
-            let mut ts: libc::timespec = std::mem::zeroed();
+            let mut ts: libc::timespec = core::mem::zeroed();
             ts.tv_sec = diff.as_secs() as libc::time_t;
             ts.tv_nsec = diff.subsec_nanos() as tv_nsec_t;
             self.futex_wait(Some(ts));
@@ -152,5 +151,12 @@ impl super::UnparkHandleT for UnparkHandle {
 
 #[inline]
 pub fn thread_yield() {
-    thread::yield_now();
+    // `std::thread::yield_now` is a `sched_yield` call.
+    #[cfg(feature = "std")]
+    std::thread::yield_now();
+    // SAFETY: no arguments, and no failure mode this cares about.
+    #[cfg(not(feature = "std"))]
+    unsafe {
+        libc::sched_yield();
+    }
 }

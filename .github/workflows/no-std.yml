@@ -1,0 +1,67 @@
+name: no_std
+# Manual only. Nothing runs on push or on a pull request.
+#
+# Every workflow in this fork is manual, this one included. Upstream's
+# rust.yml runs a matrix of GitHub-hosted ubuntu, macOS and Windows runners on
+# every push and pull request, and release-plz publishes to crates.io on every
+# push to master. Neither is something a fork should do on its own, so both are
+# workflow_dispatch here too.
+on:
+  workflow_dispatch:
+
+jobs:
+  # One ubicloud runner. Windows and musl are reached by cross-compiling from
+  # it rather than by renting machines: every thread parker and every
+  # thread-local backend is cfg-selected, so what a matrix would catch here is
+  # a compile failure, and cargo check --target catches those from Linux.
+  check:
+    runs-on: ubicloud-standard-4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+          targets: x86_64-pc-windows-gnu, aarch64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --all -- --check
+
+      # The default feature set is std. If either of these breaks, the change
+      # is not additive and does not belong.
+      #
+      # `parking_lot` is not named with `-p` anywhere here: the benchmarks
+      # dev-depend on the published crate under another name, so the spec is
+      # ambiguous between the path and the registry copy. Without `-p` these
+      # run against the package in this directory, which is the one under test.
+      - run: cargo test -p parking_lot_lite_hack_core
+      - run: cargo test
+
+      # The same two crates with the feature off. These are the whole existing
+      # suite, 12 + 91 tests, running against the `no_std` code paths rather
+      # than only against the default build.
+      - run: cargo test -p parking_lot_lite_hack_core --no-default-features --lib
+      - run: cargo test --no-default-features --lib
+
+      # And what actually proves the library does not link `std`, which a test
+      # binary cannot: the test harness keeps its own `std` either way.
+      - run: cargo check -p parking_lot_lite_hack_core --no-default-features
+      - run: cargo check --no-default-features
+      - run: cargo check --no-default-features --target x86_64-pc-windows-gnu
+      - run: cargo check --no-default-features --target aarch64-unknown-linux-musl
+
+      - run: cargo test --test no_std_backends
+      - run: cargo test --no-default-features --test no_std_backends
+
+      # `arc_lock` without `std` is the combination a consumer needs when a
+      # lookup hands back a reference into a value that is still locked, so it
+      # gets its own line rather than riding on `--all-features`. It pulls
+      # `alloc` in through `lock_api`, which is the part that can break
+      # independently of everything above.
+      - run: cargo test --no-default-features --features arc_lock,send_guard --test no_std_backends
+      - run: cargo check --no-default-features --features arc_lock,send_guard --target x86_64-pc-windows-gnu
+      - run: cargo check --no-default-features --features arc_lock,send_guard --target aarch64-unknown-linux-musl
+
+      # The benchmarks are neither built nor run here. They measure CPU with
+      # getrusage, so they are unix-only, and a shared runner cannot produce a
+      # lock benchmark worth reading. They are built on the machine that runs
+      # them.

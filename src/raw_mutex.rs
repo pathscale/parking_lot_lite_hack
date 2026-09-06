@@ -5,14 +5,15 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use crate::{deadlock, util};
+use crate::util;
 use core::{
     sync::atomic::{AtomicU8, Ordering},
     time::Duration,
 };
 use lock_api::RawMutex as RawMutex_;
+use parking_lot_core::deadlock;
+use parking_lot_core::time::Instant;
 use parking_lot_core::{self, ParkResult, SpinWait, UnparkResult, UnparkToken, DEFAULT_PARK_TOKEN};
-use std::time::Instant;
 
 // UnparkToken used to indicate that that the target thread should attempt to
 // lock the mutex again as soon as it is unparked.
@@ -178,33 +179,9 @@ unsafe impl lock_api::RawMutexTimed for RawMutex {
 }
 
 impl RawMutex {
-    // Used by Condvar when requeuing threads to us, must be called while
-    // holding the queue lock.
-    #[inline]
-    pub(crate) fn mark_parked_if_locked(&self) -> bool {
-        let mut state = self.state.load(Ordering::Relaxed);
-        loop {
-            if state & LOCKED_BIT == 0 {
-                return false;
-            }
-            match self.state.compare_exchange_weak(
-                state,
-                state | PARKED_BIT,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return true,
-                Err(x) => state = x,
-            }
-        }
-    }
-
-    // Used by Condvar when requeuing threads to us, must be called while
-    // holding the queue lock.
-    #[inline]
-    pub(crate) fn mark_parked(&self) {
-        self.state.fetch_or(PARKED_BIT, Ordering::Relaxed);
-    }
+    // `mark_parked_if_locked` and `mark_parked` were here, for `Condvar` to
+    // call while requeuing threads onto this mutex. `Condvar` is not carried
+    // in this fork.
 
     #[cold]
     fn lock_slow(&self, timeout: Option<Instant>) -> bool {

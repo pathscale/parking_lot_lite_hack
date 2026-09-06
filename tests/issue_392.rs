@@ -1,4 +1,4 @@
-use parking_lot::RwLock;
+use parking_lot_lite_hack::RwLock;
 
 struct Lock(RwLock<i32>);
 
