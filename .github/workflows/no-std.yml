@@ -49,6 +49,48 @@ jobs:
       - run: cargo check --no-default-features --target x86_64-pc-windows-gnu
       - run: cargo check --no-default-features --target aarch64-unknown-linux-musl
 
+      # None of the above can catch a `std` that arrives through a *dependency's*
+      # own default features, and one did: `core/Cargo.toml` declared `libc` with
+      # defaults on, `libc`'s defaults include `std`, and cargo unifies features
+      # across the whole graph. `cargo check --no-default-features` passed the
+      # entire time. It has to - turning off *this crate's* features says nothing
+      # about `libc`'s, the crate stays `#![no_std]` either way, and an rlib has
+      # no link line to inspect. Every target above ships a `std`, so a
+      # dependency's `std` feature cannot fail there either.
+      #
+      # A consumer found it instead, at its own link step, which is the wrong
+      # place and the wrong person. So the resolve is checked directly: in a
+      # `--no-default-features` build, no package in the graph may have its `std`
+      # feature enabled. Proc macros are excluded because they run host-side and
+      # are never linked into the consumer.
+      #
+      # Planted and confirmed: with `libc = "0.2.95"` restored in
+      # `core/Cargo.toml`, this step prints `libc v0.2.189 default,std` for both
+      # packages and exits 1; with `default-features = false` it is silent.
+      - name: no std feature anywhere in the no_std resolve
+        run: |
+          set -eu
+          fail=0
+          for pkg in parking_lot_lite_hack_core parking_lot_lite_hack; do
+            hits=$(cargo tree -p "$pkg" --no-default-features \
+                     --edges normal,no-proc-macro --prefix none \
+                     --format '{p} {f}' \
+                   | awk '$0 ~ /(^| |,)std(,|$)/' | sort -u)
+            if [ -n "$hits" ]; then
+              echo "STD FEATURE ENABLED in the no_std resolve of $pkg:"
+              echo "$hits" | sed 's/^/    /'
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo
+            echo "A dependency declared without \`default-features = false\` turns its"
+            echo "\`std\` on, and cargo unifies that across every consumer. Fix the"
+            echo "declaration; do not add an exception here."
+            exit 1
+          fi
+          echo "no_std resolve is clean: no package has its std feature on."
+
       - run: cargo test --test no_std_backends
       - run: cargo test --no-default-features --test no_std_backends
 
