@@ -1,6 +1,6 @@
 [package]
 name = "parking_lot_lite_hack"
-version = "0.12.6"
+version = "0.12.7"
 authors = ["Amanieu d'Antras <amanieu@gmail.com>"]
 description = "parking_lot's Mutex and RwLock, without std"
 license = "MIT OR Apache-2.0"
@@ -21,7 +21,7 @@ features = ["arc_lock", "send_guard"]
 [dependencies]
 # `default-features = false`, or the core's own `default = ["std"]` is always
 # on and this crate's `std` feature can never be turned off.
-parking_lot_core = { package = "parking_lot_lite_hack_core", path = "core", version = "0.9.12", default-features = false }
+parking_lot_core = { package = "parking_lot_lite_hack_core", path = "core", version = "0.9.13", default-features = false }
 lock_api = { path = "lock_api", version = "0.4.14" }
 
 [dev-dependencies]
