@@ -17,11 +17,15 @@ rustdoc-args = ["--generate-link-to-definition"]
 cfg-if = "1.0.0"
 smallvec = "1.6.1"
 
+# `default-features = false` is not tidiness. `libc`'s default features include `std`, and cargo
+# unifies features across the graph, so this one line was enough to put `libstd` on the link line
+# of a consumer where every other crate is `#![no_std]`. `parking_lot_core` uses `libc` for
+# `futex`/`pthread` calls and none of the `std` half.
 [target.'cfg(target_os = "aix")'.dependencies]
-libc = "0.2.181"
+libc = { version = "0.2.181", default-features = false }
 
 [target.'cfg(all(unix, not(target_os = "aix")))'.dependencies]
-libc = "0.2.95"
+libc = { version = "0.2.95", default-features = false }
 
 
 [target.'cfg(windows)'.dependencies]
