@@ -36,7 +36,9 @@
 #![warn(rust_2018_idioms)]
 
 mod elision;
+mod fair_mutex;
 mod mutex;
+mod raw_fair_mutex;
 mod raw_mutex;
 mod raw_rwlock;
 mod rwlock;
@@ -47,7 +49,9 @@ type GuardMarker = lock_api::GuardSend;
 #[cfg(not(feature = "send_guard"))]
 type GuardMarker = lock_api::GuardNoSend;
 
+pub use self::fair_mutex::{const_fair_mutex, FairMutex, FairMutexGuard, MappedFairMutexGuard};
 pub use self::mutex::{const_mutex, MappedMutexGuard, Mutex, MutexGuard};
+pub use self::raw_fair_mutex::RawFairMutex;
 pub use self::raw_mutex::RawMutex;
 pub use self::raw_rwlock::RawRwLock;
 pub use self::rwlock::{
