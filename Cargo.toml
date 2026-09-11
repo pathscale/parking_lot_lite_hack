@@ -1,6 +1,6 @@
 [package]
 name = "parking_lot_lite_hack"
-version = "0.12.7"
+version = "0.12.8"
 authors = ["Amanieu d'Antras <amanieu@gmail.com>"]
 description = "parking_lot's Mutex and RwLock, without std"
 license = "MIT OR Apache-2.0"

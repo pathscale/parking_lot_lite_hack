@@ -107,9 +107,6 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
 
-    #[cfg(feature = "serde")]
-    use bincode::{deserialize, serialize};
-
     #[derive(Eq, PartialEq, Debug)]
     struct NonCopy(i32);
 
@@ -257,18 +254,5 @@ mod tests {
         assert_eq!(format!("{:?}", mutex), "Mutex { data: [0, 10] }");
         let _lock = mutex.lock();
         assert_eq!(format!("{:?}", mutex), "Mutex { data: <locked> }");
-    }
-
-    #[cfg(feature = "serde")]
-    #[test]
-    fn test_serde() {
-        let contents: Vec<u8> = vec![0, 1, 2];
-        let mutex = FairMutex::new(contents.clone());
-
-        let serialized = serialize(&mutex).unwrap();
-        let deserialized: FairMutex<Vec<u8>> = deserialize(&serialized).unwrap();
-
-        assert_eq!(*(mutex.lock()), *(deserialized.lock()));
-        assert_eq!(contents, *(deserialized.lock()));
     }
 }

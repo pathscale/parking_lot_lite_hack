@@ -54,7 +54,7 @@ That is the whole list. Upstream's `deadlock_detection`, `serde`, `owning_ref`,
 
 | removed | why |
 |---|---|
-| `Condvar`, `Once`, `FairMutex`, `ReentrantMutex` | not used by the consumer this exists for |
+| `Condvar`, `Once`, `ReentrantMutex` | not used by the consumer this exists for |
 | deadlock detection | the only thing in `parking_lot_core` that needed `HashSet`, `mpsc` and `ThreadId`, which is to say the only thing that needed `std` |
 | hardware lock elision | x86 only, off by default upstream, and `have_elision()` folds to `false` here |
 | the wasm, SGX, Redox and generic thread parkers | the four backends that reach for `std`; a target that selects one now gets a `compile_error!` naming the restriction |
