@@ -592,7 +592,7 @@ mod tests {
         }
 
         thread_local! {
-            static B: Bar = Bar(RwLock::new(()));
+            static B: Bar = const { Bar(RwLock::new(())) };
         }
 
         thread::spawn(|| {

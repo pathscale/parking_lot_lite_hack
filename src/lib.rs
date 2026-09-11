@@ -9,7 +9,7 @@
 //! else removed.
 //!
 //! This is a fork, not a reimplementation: `raw_mutex.rs` and `raw_rwlock.rs`
-//! are upstream's own files. What is gone is `Condvar`, `Once`, `FairMutex`,
+//! are upstream's own files. What is gone is `Condvar`, `Once`,
 //! `ReentrantMutex`, deadlock detection, hardware lock elision, serde, and
 //! every thread parker except unix, linux and Windows.
 //!
