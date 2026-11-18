@@ -1,6 +1,6 @@
 [package]
 name = "parking_lot_lite_hack_core"
-version = "0.9.13"
+version = "0.9.14"
 authors = ["Amanieu d'Antras <amanieu@gmail.com>"]
 description = "parking_lot_core without std, for parking_lot_lite_hack"
 license = "MIT OR Apache-2.0"
@@ -26,6 +26,9 @@ libc = { version = "0.2.181", default-features = false }
 
 [target.'cfg(all(unix, not(target_os = "aix")))'.dependencies]
 libc = { version = "0.2.95", default-features = false }
+
+[target.'cfg(target_os = "none")'.dependencies]
+libc-rs = "0.2.5"
 
 
 [target.'cfg(windows)'.dependencies]

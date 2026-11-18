@@ -60,6 +60,9 @@ cfg_if! {
     } else if #[cfg(windows)] {
         #[path = "windows/mod.rs"]
         mod imp;
+    } else if #[cfg(target_os = "none")] {
+        #[path = "none.rs"]
+        mod imp;
     } else {
         // Upstream falls through to wasm, SGX, Redox and a generic
         // `std::thread::park` backend here. All four are gone: they are the

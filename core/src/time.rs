@@ -51,6 +51,15 @@ mod monotonic {
             }
         }
 
+        #[cfg(target_os = "none")]
+        pub fn now() -> Self {
+            let now = libc_rs::time::clock_gettime(libc_rs::time::CLOCK_MONOTONIC)
+                .expect("CLOCK_MONOTONIC");
+            Self {
+                nanos: now.tv_sec.max(0) as u128 * 1_000_000_000 + now.tv_nsec.max(0) as u128,
+            }
+        }
+
         /// `QueryPerformanceCounter` rather than `GetTickCount64`: the
         /// fair-unlock timeout is randomised across zero to one millisecond,
         /// which a millisecond-resolution clock cannot express. The frequency
