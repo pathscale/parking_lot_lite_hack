@@ -16,10 +16,6 @@ rustdoc-args = ["--generate-link-to-definition"]
 [dependencies]
 cfg-if = "1.0.0"
 smallvec = "1.6.1"
-eko-libc-lite = { path = "../../../ekostd/crates/libc-lite", optional = true }
-eko-libc-rs = { path = "../../../ekostd/crates/libc-rs", optional = true }
-
-[target.'cfg(all(unix, not(target_os = "aix")))'.dependencies]
 libc = { package = "eko-libc-lite", path = "../../../ekostd/crates/libc-lite" }
 
 [target.'cfg(target_os = "none")'.dependencies]
