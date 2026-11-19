@@ -26,10 +26,10 @@ libc = { version = "0.2.181", default-features = false }
 
 [target.'cfg(all(unix, not(target_os = "aix")))'.dependencies]
 libc = { package = "eko-libc-lite", path = "../../../ekostd/crates/libc-lite" }
-# libc = { version = "0.2.95", default-features = false }
 
 [target.'cfg(target_os = "none")'.dependencies]
 libc-rs = { package = "eko-libc-rs", path = "../../../ekostd/crates/libc-rs" }
+libc = { package = "eko-libc-rs", path = "../../../ekostd/crates/libc-rs" }
 
 
 [target.'cfg(windows)'.dependencies]
