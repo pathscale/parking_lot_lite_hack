@@ -19,10 +19,10 @@ smallvec = "1.6.1"
 ekostd = { version = "^0.2.10", default-features = false }
 
 [target.'cfg(all(unix, not(target_os = "aix")))'.dependencies]
-libc = { version = "0.2", default-features = false }
+libc = { package = "ekostd", version = "^0.2.10" }
 
 [target.'cfg(target_os = "none")'.dependencies]
-libc = { package = "libc-rs", version = "0.2" }
+libc = { package = "ekostd", version = "^0.2.10" }
 
 
 [target.'cfg(windows)'.dependencies]
