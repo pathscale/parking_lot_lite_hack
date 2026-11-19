@@ -16,9 +16,10 @@ rustdoc-args = ["--generate-link-to-definition"]
 [dependencies]
 cfg-if = "1.0.0"
 smallvec = "1.6.1"
+ekostd = { version = "^0.2.10", default-features = false }
 
 [target.'cfg(all(unix, not(target_os = "aix")))'.dependencies]
-libc = { package = "libc-lite", version = "0.1" }
+libc = { version = "0.2", default-features = false }
 
 [target.'cfg(target_os = "none")'.dependencies]
 libc = { package = "libc-rs", version = "0.2" }
