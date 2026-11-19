@@ -1,6 +1,6 @@
 [package]
 name = "parking_lot_lite_hack_core"
-version = "0.9.15"
+version = "0.9.16"
 authors = ["Amanieu d'Antras <amanieu@gmail.com>"]
 description = "parking_lot_core without std, for parking_lot_lite_hack"
 license = "MIT OR Apache-2.0"
@@ -16,34 +16,20 @@ rustdoc-args = ["--generate-link-to-definition"]
 [dependencies]
 cfg-if = "1.0.0"
 smallvec = "1.6.1"
-ekostd = { version = "^0.2.10", default-features = false }
-
-[target.'cfg(all(unix, not(target_os = "aix")))'.dependencies]
-libc = { package = "ekostd", version = "^0.2.10" }
+ekostd = { version = "^0.2.11", default-features = false }
 
 [target.'cfg(target_os = "none")'.dependencies]
-libc = { package = "ekostd", version = "^0.2.10" }
-
+libc-rs = "0.2.5"
 
 [target.'cfg(windows)'.dependencies]
 windows-link = "0.2.0"
-# `FlsAlloc` and `QueryPerformanceCounter`, for the `no_std` thread-local and
-# clock. Unused when `std` is on.
 windows-sys = { version = "0.60", features = [
     "Win32_System_Threading",
     "Win32_System_Performance",
 ] }
 
 [features]
-default = ["std"]
-
-# Off, this crate does not link `std`. It still blocks in the kernel: `libc`
-# with default features off is itself `no_std`, so the constraint was never
-# `no_std`, it was having an operating system.
-#
-# What changes without it: `thread_local!` becomes a `pthread_key_t` (an
-# `FlsAlloc` slot on Windows), `std::time::Instant` becomes a monotonic clock
-# reading, and deadlock detection is unavailable, since it is the only thing
-# here that needs `HashSet`, `mpsc` and `ThreadId`.
+default = []
+# Retained as a no-op alias so downstream manifests naming `parking_lot/std` keep resolving;
+# the crate always uses its unified no_std + ekostd codepath.
 std = []
-

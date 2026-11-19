@@ -37,12 +37,7 @@
 //! For example, one could create an `ArcMutex` type that combines the atomic
 //! reference count and the two mutex bits in the same atomic word.
 
-// `not(test)` so the crate keeps the `std` prelude when the harness compiles
-// it. The substitutions below are selected on `feature = "std"` rather than on
-// this attribute, so the unit tests exercise the `no_std` code paths either
-// way, and `cargo check --no-default-features` is what proves the library
-// really does not link `std`.
-#![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
+#![cfg_attr(not(test), no_std)]
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 
@@ -52,7 +47,6 @@ mod parking_lot;
 mod spinwait;
 mod thread_parker;
 pub mod time;
-#[cfg(not(feature = "std"))]
 mod tls;
 mod util;
 mod word_lock;

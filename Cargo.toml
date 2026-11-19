@@ -1,6 +1,6 @@
 [package]
 name = "parking_lot_lite_hack"
-version = "0.12.9"
+version = "0.12.10"
 authors = ["Amanieu d'Antras <amanieu@gmail.com>"]
 description = "parking_lot's Mutex and RwLock, without std"
 license = "MIT OR Apache-2.0"
@@ -19,9 +19,7 @@ rustdoc-args = ["--generate-link-to-definition"]
 features = ["arc_lock", "send_guard"]
 
 [dependencies]
-# `default-features = false`, or the core's own `default = ["std"]` is always
-# on and this crate's `std` feature can never be turned off.
-parking_lot_core = { package = "parking_lot_lite_hack_core", path = "core", version = "0.9.14", default-features = false }
+parking_lot_core = { package = "parking_lot_lite_hack_core", path = "core", version = "^0.9.16", default-features = false }
 lock_api = { path = "lock_api", version = "0.4.14" }
 
 [dev-dependencies]
@@ -42,10 +40,10 @@ arctic-wt = "^0.1"
 rand = "0.8.3"
 
 [features]
-default = ["std"]
+default = []
 
-# Off, this crate does not link `std`. See `parking_lot_core`'s feature of the
-# same name for what changes.
+# Retained as a no-op alias so downstream manifests naming `parking_lot/std` keep resolving;
+# the crate always uses its unified no_std + ekostd codepath.
 std = ["parking_lot_core/std"]
 arc_lock = ["lock_api/arc_lock"]
 send_guard = []

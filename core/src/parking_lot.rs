@@ -174,22 +174,10 @@ fn with_thread_data<T>(f: impl FnOnce(&ThreadData) -> T) -> T {
     // to construct. Try to use a thread-local version if possible. Otherwise just
     // create a ThreadData on the stack
     let mut thread_data_storage = None;
-    #[cfg(feature = "std")]
-    let thread_data_ptr = {
-        thread_local!(static THREAD_DATA: ThreadData = ThreadData::new());
-        THREAD_DATA
-            .try_with(|x| x as *const ThreadData)
-            .unwrap_or_else(|_| thread_data_storage.get_or_insert_with(ThreadData::new))
-    };
-    // Without `std` the same slot is a `pthread_key_t`, which is what
-    // `thread_local!` lowers to for a type with a destructor.
-    #[cfg(not(feature = "std"))]
-    let thread_data_ptr = {
-        static THREAD_DATA: crate::tls::Tls<ThreadData> = crate::tls::Tls::new();
-        THREAD_DATA
-            .with(ThreadData::new, |x| x as *const ThreadData)
-            .unwrap_or_else(|| thread_data_storage.get_or_insert_with(ThreadData::new))
-    };
+    static THREAD_DATA: crate::tls::Tls<ThreadData> = crate::tls::Tls::new();
+    let thread_data_ptr = THREAD_DATA
+        .with(ThreadData::new, |x| x as *const ThreadData)
+        .unwrap_or_else(|| thread_data_storage.get_or_insert_with(ThreadData::new));
 
     f(unsafe { &*thread_data_ptr })
 }

@@ -5,30 +5,16 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-//! The monotonic clock the parking lot uses, with or without `std`.
-//!
-//! With `std` this is `std::time::Instant`. Without it, a `clock_gettime` or
-//! `QueryPerformanceCounter` reading, which are the same sources `std` uses.
-//!
-//! Only three things are asked of it: read it, add a `Duration`, and compare
-//! two readings. That is what the fair-unlock timeout and `park_until` use.
+//! The monotonic clock the parking lot uses, over `ekostd` on Unix / `target_os = "none"`
+//! and `QueryPerformanceCounter` on Windows.
 
-#[cfg(feature = "std")]
-pub use std::time::Instant;
-
-#[cfg(not(feature = "std"))]
 pub use self::monotonic::Instant;
 
-#[cfg(not(feature = "std"))]
 mod monotonic {
     use core::ops::Add;
     use core::time::Duration;
 
     /// A point on the system's monotonic clock.
-    ///
-    /// `CLOCK_MONOTONIC` on unix and `QueryPerformanceCounter` on Windows,
-    /// which are the sources `std::time::Instant` uses on those platforms, so
-    /// a timeout here means what a timeout there means.
     #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
     pub struct Instant {
         nanos: u128,
@@ -38,6 +24,7 @@ mod monotonic {
         /// Read the clock.
         #[cfg(unix)]
         pub fn now() -> Self {
+            use eko::libc_lite as libc;
             // SAFETY: `clock_gettime` either fills the `timespec` or returns
             // non-zero without writing to it.
             let mut now = unsafe { core::mem::zeroed::<libc::timespec>() };
@@ -51,6 +38,7 @@ mod monotonic {
             }
         }
 
+        /// Read the clock.
         #[cfg(target_os = "none")]
         pub fn now() -> Self {
             let now = libc_rs::time::clock_gettime(libc_rs::time::CLOCK_MONOTONIC)
@@ -60,10 +48,7 @@ mod monotonic {
             }
         }
 
-        /// `QueryPerformanceCounter` rather than `GetTickCount64`: the
-        /// fair-unlock timeout is randomised across zero to one millisecond,
-        /// which a millisecond-resolution clock cannot express. The frequency
-        /// is fixed at boot, so it is read once.
+        /// Read the clock.
         #[cfg(windows)]
         pub fn now() -> Self {
             use core::sync::atomic::{AtomicU64, Ordering};
@@ -75,14 +60,11 @@ mod monotonic {
             let mut frequency = TICKS_PER_SECOND.load(Ordering::Relaxed);
             if frequency == 0 {
                 let mut read = 0i64;
-                // SAFETY: a live local; the call cannot fail on any supported
-                // version of Windows.
                 assert!(unsafe { QueryPerformanceFrequency(&raw mut read) } != 0);
                 frequency = read as u64;
                 TICKS_PER_SECOND.store(frequency, Ordering::Relaxed);
             }
             let mut ticks = 0i64;
-            // SAFETY: as above.
             assert!(unsafe { QueryPerformanceCounter(&raw mut ticks) } != 0);
             Self {
                 nanos: ticks as u128 * 1_000_000_000 / frequency as u128,

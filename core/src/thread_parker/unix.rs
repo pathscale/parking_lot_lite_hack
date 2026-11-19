@@ -11,9 +11,34 @@ use core::ptr;
 use core::time::Duration;
 use core::{
     cell::{Cell, UnsafeCell},
+    ffi::{c_int, c_long, c_void},
     mem::MaybeUninit,
 };
-use libc;
+use eko::libc_lite as libc;
+
+#[cfg(not(any(target_vendor = "apple", target_os = "android", target_os = "espidf")))]
+#[repr(C, align(8))]
+struct PthreadCondAttr {
+    _opaque: [u8; 64],
+}
+
+unsafe extern "C" {
+    #[cfg(target_vendor = "apple")]
+    fn gettimeofday(tp: *mut libc::timeval, tz: *mut c_void) -> c_int;
+
+    fn pthread_cond_timedwait(
+        cond: *mut libc::pthread_cond_t,
+        lock: *mut libc::pthread_mutex_t,
+        abstime: *const libc::timespec,
+    ) -> c_int;
+
+    #[cfg(not(any(target_vendor = "apple", target_os = "android", target_os = "espidf")))]
+    fn pthread_condattr_init(attr: *mut PthreadCondAttr) -> c_int;
+    #[cfg(not(any(target_vendor = "apple", target_os = "android", target_os = "espidf")))]
+    fn pthread_condattr_setclock(attr: *mut PthreadCondAttr, clock_id: c_int) -> c_int;
+    #[cfg(not(any(target_vendor = "apple", target_os = "android", target_os = "espidf")))]
+    fn pthread_condattr_destroy(attr: *mut PthreadCondAttr) -> c_int;
+}
 
 // x32 Linux uses a non-standard type for tv_nsec in timespec.
 // See https://sourceware.org/bugzilla/show_bug.cgi?id=16437
@@ -22,7 +47,7 @@ use libc;
 type tv_nsec_t = i64;
 #[cfg(not(all(target_arch = "x86_64", target_pointer_width = "32")))]
 #[allow(non_camel_case_types)]
-type tv_nsec_t = libc::c_long;
+type tv_nsec_t = c_long;
 
 // Helper type for putting a thread to sleep until some other thread wakes it up
 pub struct ThreadParker {
@@ -58,9 +83,6 @@ impl super::ThreadParkerT for ThreadParker {
 
     #[inline]
     unsafe fn timed_out(&self) -> bool {
-        // We need to grab the mutex here because another thread may be
-        // concurrently executing UnparkHandle::unpark, which is done without
-        // holding the queue lock.
         let r = libc::pthread_mutex_lock(self.mutex.get());
         debug_assert_eq!(r, 0);
         let should_park = self.should_park.get();
@@ -94,17 +116,13 @@ impl super::ThreadParkerT for ThreadParker {
             }
 
             if let Some(ts) = timeout_to_timespec(timeout - now) {
-                let r = libc::pthread_cond_timedwait(self.condvar.get(), self.mutex.get(), &ts);
+                let r = pthread_cond_timedwait(self.condvar.get(), self.mutex.get(), &ts);
                 if ts.tv_sec < 0 {
-                    // On some systems, negative timeouts will return EINVAL. In
-                    // that case we won't sleep and will just busy loop instead,
-                    // which is the best we can do.
                     debug_assert!(r == 0 || r == libc::ETIMEDOUT || r == libc::EINVAL);
                 } else {
                     debug_assert!(r == 0 || r == libc::ETIMEDOUT);
                 }
             } else {
-                // Timeout calculation overflowed, just sleep indefinitely
                 let r = libc::pthread_cond_wait(self.condvar.get(), self.mutex.get());
                 debug_assert_eq!(r, 0);
             }
@@ -135,14 +153,14 @@ impl ThreadParker {
     #[cfg(not(any(target_vendor = "apple", target_os = "android", target_os = "espidf")))]
     #[inline]
     unsafe fn init(&self) {
-        let mut attr = MaybeUninit::<libc::pthread_condattr_t>::uninit();
-        let r = libc::pthread_condattr_init(attr.as_mut_ptr());
+        let mut attr = MaybeUninit::<PthreadCondAttr>::uninit();
+        let r = pthread_condattr_init(attr.as_mut_ptr());
         debug_assert_eq!(r, 0);
-        let r = libc::pthread_condattr_setclock(attr.as_mut_ptr(), libc::CLOCK_MONOTONIC);
+        let r = pthread_condattr_setclock(attr.as_mut_ptr(), libc::CLOCK_MONOTONIC as c_int);
         debug_assert_eq!(r, 0);
-        let r = libc::pthread_cond_init(self.condvar.get(), attr.as_ptr());
+        let r = libc::pthread_cond_init(self.condvar.get(), attr.as_ptr().cast());
         debug_assert_eq!(r, 0);
-        let r = libc::pthread_condattr_destroy(attr.as_mut_ptr());
+        let r = pthread_condattr_destroy(attr.as_mut_ptr());
         debug_assert_eq!(r, 0);
     }
 }
@@ -150,10 +168,6 @@ impl ThreadParker {
 impl Drop for ThreadParker {
     #[inline]
     fn drop(&mut self) {
-        // On DragonFly pthread_mutex_destroy() returns EINVAL if called on a
-        // mutex that was just initialized with libc::PTHREAD_MUTEX_INITIALIZER.
-        // Once it is used (locked/unlocked) or pthread_mutex_init() is called,
-        // this behaviour no longer occurs. The same applies to condvars.
         unsafe {
             let r = libc::pthread_mutex_destroy(self.mutex.get());
             debug_assert!(r == 0 || r == libc::EINVAL);
@@ -171,10 +185,6 @@ impl super::UnparkHandleT for UnparkHandle {
     #[inline]
     unsafe fn unpark(self) {
         (*self.thread_parker).should_park.set(false);
-
-        // We notify while holding the lock here to avoid races with the target
-        // thread. In particular, the thread could exit after we unlock the
-        // mutex, which would make the condvar access invalid memory.
         let r = libc::pthread_cond_signal((*self.thread_parker).condvar.get());
         debug_assert_eq!(r, 0);
         let r = libc::pthread_mutex_unlock((*self.thread_parker).mutex.get());
@@ -187,9 +197,8 @@ impl super::UnparkHandleT for UnparkHandle {
 #[inline]
 fn timespec_now() -> libc::timespec {
     let mut now = MaybeUninit::<libc::timeval>::uninit();
-    let r = unsafe { libc::gettimeofday(now.as_mut_ptr(), ptr::null_mut()) };
+    let r = unsafe { gettimeofday(now.as_mut_ptr(), ptr::null_mut()) };
     debug_assert_eq!(r, 0);
-    // SAFETY: We know `libc::gettimeofday` has initialized the value.
     let now = unsafe { now.assume_init() };
     libc::timespec {
         tv_sec: now.tv_sec,
@@ -201,15 +210,12 @@ fn timespec_now() -> libc::timespec {
 fn timespec_now() -> libc::timespec {
     let mut now = MaybeUninit::<libc::timespec>::uninit();
     let clock = if cfg!(target_os = "android") {
-        // Android doesn't support pthread_condattr_setclock, so we need to
-        // specify the timeout in CLOCK_REALTIME.
         libc::CLOCK_REALTIME
     } else {
         libc::CLOCK_MONOTONIC
     };
     let r = unsafe { libc::clock_gettime(clock, now.as_mut_ptr()) };
     debug_assert_eq!(r, 0);
-    // SAFETY: We know `libc::clock_gettime` has initialized the value.
     unsafe { now.assume_init() }
 }
 
@@ -217,14 +223,13 @@ fn timespec_now() -> libc::timespec {
 // pthread_cond_t.
 #[inline]
 fn timeout_to_timespec(timeout: Duration) -> Option<libc::timespec> {
-    // Handle overflows early on
-    if timeout.as_secs() > libc::time_t::max_value() as u64 {
+    if timeout.as_secs() > c_long::MAX as u64 {
         return None;
     }
 
     let now = timespec_now();
     let mut nsec = now.tv_nsec + timeout.subsec_nanos() as tv_nsec_t;
-    let mut sec = now.tv_sec.checked_add(timeout.as_secs() as libc::time_t);
+    let mut sec = now.tv_sec.checked_add(timeout.as_secs() as _);
     if nsec >= 1_000_000_000 {
         nsec -= 1_000_000_000;
         sec = sec.and_then(|sec| sec.checked_add(1));
@@ -238,11 +243,6 @@ fn timeout_to_timespec(timeout: Duration) -> Option<libc::timespec> {
 
 #[inline]
 pub fn thread_yield() {
-    // `std::thread::yield_now` is a `sched_yield` call.
-    #[cfg(feature = "std")]
-    std::thread::yield_now();
-    // SAFETY: no arguments, and no failure mode this cares about.
-    #[cfg(not(feature = "std"))]
     unsafe {
         libc::sched_yield();
     }

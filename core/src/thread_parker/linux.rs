@@ -7,10 +7,30 @@
 
 use crate::time::Instant;
 use core::{
+    ffi::{c_int, c_long},
     ptr,
     sync::atomic::{AtomicI32, Ordering},
 };
-use libc;
+use eko::libc_lite as libc;
+
+const FUTEX_WAIT: c_int = 0;
+const FUTEX_WAKE: c_int = 1;
+const FUTEX_PRIVATE_FLAG: c_int = 128;
+
+#[cfg(target_arch = "x86_64")]
+const SYS_FUTEX: c_long = 202;
+#[cfg(target_arch = "aarch64")]
+const SYS_FUTEX: c_long = 98;
+#[cfg(target_arch = "riscv64")]
+const SYS_FUTEX: c_long = 98;
+#[cfg(target_arch = "x86")]
+const SYS_FUTEX: c_long = 240;
+#[cfg(target_arch = "arm")]
+const SYS_FUTEX: c_long = 240;
+
+unsafe extern "C" {
+    fn syscall(num: c_long, ...) -> c_long;
+}
 
 // x32 Linux uses a non-standard type for tv_nsec in timespec.
 // See https://sourceware.org/bugzilla/show_bug.cgi?id=16437
@@ -19,17 +39,10 @@ use libc;
 type tv_nsec_t = i64;
 #[cfg(not(all(target_arch = "x86_64", target_pointer_width = "32")))]
 #[allow(non_camel_case_types)]
-type tv_nsec_t = libc::c_long;
+type tv_nsec_t = c_long;
 
-fn errno() -> libc::c_int {
-    #[cfg(target_os = "linux")]
-    unsafe {
-        *libc::__errno_location()
-    }
-    #[cfg(target_os = "android")]
-    unsafe {
-        *libc::__errno()
-    }
+fn errno() -> c_int {
+    eko::Errno::current().0
 }
 
 // Helper type for putting a thread to sleep until some other thread wakes it up
@@ -74,26 +87,21 @@ impl super::ThreadParkerT for ThreadParker {
                 return false;
             }
             let diff = timeout - now;
-            if diff.as_secs() as libc::time_t as u64 != diff.as_secs() {
-                // Timeout overflowed, just sleep indefinitely
+            if diff.as_secs() > i64::MAX as u64 {
                 self.park();
                 return true;
             }
             // SAFETY: libc::timespec is zero initializable.
             let mut ts: libc::timespec = core::mem::zeroed();
-            ts.tv_sec = diff.as_secs() as libc::time_t;
+            ts.tv_sec = diff.as_secs() as _;
             ts.tv_nsec = diff.subsec_nanos() as tv_nsec_t;
             self.futex_wait(Some(ts));
         }
         true
     }
 
-    // Locks the parker to prevent the target thread from exiting. This is
-    // necessary to ensure that thread-local ThreadData objects remain valid.
-    // This should be called while holding the queue lock.
     #[inline]
     unsafe fn unpark_lock(&self) -> UnparkHandle {
-        // We don't need to lock anything, just clear the state
         self.futex.store(0, Ordering::Release);
 
         UnparkHandle { futex: &self.futex }
@@ -108,10 +116,10 @@ impl ThreadParker {
             .map(|ts_ref| ts_ref as *const _)
             .unwrap_or(ptr::null());
         let r = unsafe {
-            libc::syscall(
-                libc::SYS_futex,
+            syscall(
+                SYS_FUTEX,
                 &self.futex,
-                libc::FUTEX_WAIT | libc::FUTEX_PRIVATE_FLAG,
+                FUTEX_WAIT | FUTEX_PRIVATE_FLAG,
                 1,
                 ts_ptr,
             )
@@ -134,12 +142,10 @@ pub struct UnparkHandle {
 impl super::UnparkHandleT for UnparkHandle {
     #[inline]
     unsafe fn unpark(self) {
-        // The thread data may have been freed at this point, but it doesn't
-        // matter since the syscall will just return EFAULT in that case.
-        let r = libc::syscall(
-            libc::SYS_futex,
+        let r = syscall(
+            SYS_FUTEX,
             self.futex,
-            libc::FUTEX_WAKE | libc::FUTEX_PRIVATE_FLAG,
+            FUTEX_WAKE | FUTEX_PRIVATE_FLAG,
             1,
         );
         debug_assert!(r == 0 || r == 1 || r == -1);
@@ -151,11 +157,6 @@ impl super::UnparkHandleT for UnparkHandle {
 
 #[inline]
 pub fn thread_yield() {
-    // `std::thread::yield_now` is a `sched_yield` call.
-    #[cfg(feature = "std")]
-    std::thread::yield_now();
-    // SAFETY: no arguments, and no failure mode this cares about.
-    #[cfg(not(feature = "std"))]
     unsafe {
         libc::sched_yield();
     }

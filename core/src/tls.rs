@@ -67,6 +67,8 @@ unsafe extern "system" fn drop_value<T>(value: *const core::ffi::c_void) {
 /// The platform's own slot, under one name.
 mod slot {
     use core::ffi::c_void;
+    #[cfg(unix)]
+    use eko::libc_lite as libc;
 
     #[cfg(unix)]
     pub fn create(drop: unsafe extern "C" fn(*mut c_void)) -> usize {

@@ -26,12 +26,7 @@
 //! parking_lot = { package = "parking_lot_lite_hack", version = "0.12", default-features = false, features = ["arc_lock", "send_guard"] }
 //! ```
 
-// `not(test)` so the crate keeps the `std` prelude when the harness compiles
-// it. The substitutions below are selected on `feature = "std"` rather than on
-// this attribute, so the unit tests exercise the `no_std` code paths either
-// way, and `cargo check --no-default-features` is what proves the library
-// really does not link `std`.
-#![cfg_attr(all(not(feature = "std"), not(test)), no_std)]
+#![cfg_attr(not(test), no_std)]
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 
