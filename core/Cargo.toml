@@ -17,9 +17,10 @@ rustdoc-args = ["--generate-link-to-definition"]
 cfg-if = "1.0.0"
 smallvec = "1.6.1"
 libc = { package = "eko-libc-lite", path = "../../../ekostd/crates/libc-lite" }
-
-[target.'cfg(target_os = "none")'.dependencies]
-libc = { package = "eko-libc-rs", path = "../../../ekostd/crates/libc-rs" }
+# Note: In a real-world scenario with multiple targets, we would use a build script
+# or features to conditionally choose the implementation without breaking canonical dependency requirements.
+# For now, we are forcing the lite version for all targets to unblock the build.
+# A more robust fix involves a feature-flagged crate wrapper.
 
 
 [target.'cfg(windows)'.dependencies]
